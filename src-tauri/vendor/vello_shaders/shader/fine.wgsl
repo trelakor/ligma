@@ -1169,23 +1169,17 @@ fn bicubic_sample(
 
 // Ligma: the image's texel at `uv`, in its own pixels, nearest, where
 // reflect stands for transparent outside it
+// Without branches, so the GPU has the loads of several in flight at once
 fn figma_texel(image: CmdImage, uv: vec2<f32>) -> vec4<f32> {
     var p = floor(uv);
-    if (image.x_extend_mode == EXTEND_REFLECT && (p.x < 0.0 || p.x >= image.extents.x)) || (image.y_extend_mode == EXTEND_REFLECT && (p.y < 0.0 || p.y >= image.extents.y)) {
-        return vec4(0.0);
-    }
-    if image.x_extend_mode == EXTEND_REPEAT {
-        p.x = p.x - floor(p.x / image.extents.x) * image.extents.x;
-    }
-    if image.y_extend_mode == EXTEND_REPEAT {
-        p.y = p.y - floor(p.y / image.extents.y) * image.extents.y;
-    }
+    let outside = (image.x_extend_mode == EXTEND_REFLECT && (p.x < 0.0 || p.x >= image.extents.x)) || (image.y_extend_mode == EXTEND_REFLECT && (p.y < 0.0 || p.y >= image.extents.y));
+    p.x = select(p.x, p.x - floor(p.x / image.extents.x) * image.extents.x, image.x_extend_mode == EXTEND_REPEAT);
+    p.y = select(p.y, p.y - floor(p.y / image.extents.y) * image.extents.y, image.y_extend_mode == EXTEND_REPEAT);
     p = clamp(p, vec2(0.0), image.extents - vec2(1.0)) + image.atlas_offset;
-    let texel = maybe_premul_alpha(textureLoad(image_atlas, vec2<i32>(p), 0), image.alpha_type);
-    if image.quality == IMAGE_QUALITY_SILHOUETTE {
-        return select(vec4(0.0), vec4(1.0), texel.a > 0.0);
-    }
-    return texel;
+    let loaded = textureLoad(image_atlas, vec2<i32>(p), 0);
+    var texel = select(premul_alpha(loaded), loaded, image.alpha_type == PREMULTIPLIED_ALPHA);
+    texel = select(texel, select(vec4(0.0), vec4(1.0), texel.a > 0.0), image.quality == IMAGE_QUALITY_SILHOUETTE);
+    return select(texel, vec4(0.0), outside);
 }
 
 // Ligma: an image as Figma's canvas shows it. Shrunk, each pixel's the
@@ -1206,6 +1200,37 @@ fn figma_sample(image: CmdImage, uv: vec2<f32>) -> vec4<f32> {
         return mix(top, bottom, f.y);
     }
     let n = vec2<u32>(clamp(ceil(w), vec2(4.0), vec2(16.0)));
+    // Ligma: unturned, the samples across fall on the same columns down
+    // each row, and where they fall on two at most each way, each of those
+    // up to four texels is taken once for as many samples as fall on it
+    if dx.y == 0.0 && dy.x == 0.0 {
+        let o0 = 0.5 / vec2<f32>(n) - 0.5;
+        let o1 = (vec2<f32>(n) - 0.5) / vec2<f32>(n) - 0.5;
+        let first = floor(vec2(uv.x + dx.x * o0.x, uv.y + dy.y * o0.y));
+        let last = floor(vec2(uv.x + dx.x * o1.x, uv.y + dy.y * o1.y));
+        if all(abs(last - first) <= vec2(1.0)) {
+            var c = vec2(0u);
+            for (var k = 0u; k < n.x; k += 1u) {
+                c.x += select(0u, 1u, floor(uv.x + dx.x * ((f32(k) + 0.5) / f32(n.x) - 0.5)) == first.x);
+            }
+            for (var j = 0u; j < n.y; j += 1u) {
+                c.y += select(0u, 1u, floor(uv.y + dy.y * ((f32(j) + 0.5) / f32(n.y) - 0.5)) == first.y);
+            }
+            let near = vec2<f32>(c);
+            let far = vec2<f32>(n - c);
+            var sum = figma_texel(image, first) * (near.x * near.y);
+            if far.x > 0.0 {
+                sum += figma_texel(image, vec2(last.x, first.y)) * (far.x * near.y);
+            }
+            if far.y > 0.0 {
+                sum += figma_texel(image, vec2(first.x, last.y)) * (near.x * far.y);
+                if far.x > 0.0 {
+                    sum += figma_texel(image, last) * (far.x * far.y);
+                }
+            }
+            return sum / f32(n.x * n.y);
+        }
+    }
     var sum = vec4(0.0);
     for (var j = 0u; j < n.y; j += 1u) {
         for (var k = 0u; k < n.x; k += 1u) {
@@ -1837,11 +1862,16 @@ fn main(
                         }
                     }
                     case IMAGE_QUALITY_HIGH, IMAGE_QUALITY_SILHOUETTE: {
+                        // Ligma: each pixel's sampled before any is drawn, so
+                        // their loads are in flight together
+                        var sampled: array<vec4<f32>, PIXELS_PER_THREAD>;
+                        for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+                            let my_xy = vec2(xy.x + f32(i) + 0.5, xy.y + 0.5);
+                            sampled[i] = figma_sample(image, image.matrx.xy * my_xy.x + image.matrx.zw * my_xy.y + image.xlat);
+                        }
                         for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                             if area[i] != 0.0 {
-                                let my_xy = vec2(xy.x + f32(i) + 0.5, xy.y + 0.5);
-                                let uv = image.matrx.xy * my_xy.x + image.matrx.zw * my_xy.y + image.xlat;
-                                let fg_rgba = figma_sample(image, uv);
+                                let fg_rgba = sampled[i];
                                 let fg_i = pixel_format(fg_rgba * area[i] * image.alpha, image.format);
                                 rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
