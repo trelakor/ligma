@@ -93,6 +93,11 @@ pub const OVERLAY: &str = "native-overlay";
 
 static ON: AtomicBool = AtomicBool::new(false);
 
+/// Whether the renderer's meant to be running, as it's turned on or off
+pub fn on() -> bool {
+    ON.load(Ordering::Relaxed)
+}
+
 /// Settings' Show stats: frame times and GPU memory over the canvas, of
 /// Ligma's renderer or Figma's
 static SHOW_STATS: AtomicBool = AtomicBool::new(false);

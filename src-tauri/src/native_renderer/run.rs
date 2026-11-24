@@ -599,7 +599,7 @@ pub fn stop(app: &AppHandle) {
 }
 
 fn open(app: &AppHandle) -> Result<(), String> {
-    if CTX.lock().unwrap().is_some() {
+    if CTX.lock().unwrap().is_some() || !super::on() {
         return Ok(());
     }
     *stats().lock().unwrap() = super::Stats { dev: super::dev(), status: "Starting".into(), ..Default::default() };
@@ -654,7 +654,15 @@ fn open(app: &AppHandle) -> Result<(), String> {
         canvas: Mutex::new((0, 0)),
         tree: AtomicBool::new(false),
     });
-    *CTX.lock().unwrap() = Some(ctx.clone());
+    {
+        // Turned off as it started, which found nothing to stop, or started
+        // twice
+        let mut slot = CTX.lock().unwrap();
+        if !super::on() || slot.is_some() {
+            return Ok(());
+        }
+        *slot = Some(ctx.clone());
+    }
 
     // Skia's GPU objects stay on the thread that made them: the render
     // thread draws, the present thread shows what it has drawn

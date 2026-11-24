@@ -489,6 +489,16 @@ pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) 
 /// Saves `settings` and applies them to the running app
 pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     save(app, &settings)?;
+    // In effect before they're applied, for what's applied to read them,
+    // as whether tabs opened meanwhile are made ready for Ligma's renderer
+    let plugins_changed = {
+        let current = app.state::<Current>();
+        let mut current = current.0.lock().unwrap();
+        let shown = |s: &Settings| (s.rail_plugins, s.rail_widgets, s.actions_plugins_tab);
+        let changed = shown(&current) != shown(&settings);
+        current.clone_from(&settings);
+        changed
+    };
     crate::tabs::apply_settings(app, &settings);
     crate::game_mode::apply_settings(&settings);
     crate::notifications::apply_settings(&settings);
@@ -505,14 +515,6 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::lasso::apply_settings(app, &settings);
     crate::mcp_bridge::apply_settings(app, &settings);
     crate::native_renderer::apply_settings(app, &settings);
-    let plugins_changed = {
-        let current = app.state::<Current>();
-        let mut current = current.0.lock().unwrap();
-        let shown = |s: &Settings| (s.rail_plugins, s.rail_widgets, s.actions_plugins_tab);
-        let changed = shown(&current) != shown(&settings);
-        *current = settings;
-        changed
-    };
     if plugins_changed {
         crate::plugins::push(app);
     }
