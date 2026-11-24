@@ -369,6 +369,9 @@ pub struct Renderer {
     /// Ligma: renders' allocation counts being read back, and whether
     /// they've mapped
     pending: Vec<(wgpu::Buffer, std::sync::Arc<std::sync::Mutex<Option<bool>>>, Option<wgpu::SubmissionIndex>, bool, [u32; 7], u32)>,
+    /// Ligma: of the renders `check` last checked, in the order rendered,
+    /// which ran out of room
+    pub ran_out: Vec<bool>,
     /// Ligma: how long the last render took to record and to run, in ms
     pub timing: (f64, f64),
 }
@@ -498,6 +501,7 @@ impl Renderer {
             #[cfg(feature = "wgpu-profiler")]
             profile_result: None,
             pending: Vec::new(),
+            ran_out: Vec::new(),
             timing: (0.0, 0.0),
         })
     }
@@ -606,6 +610,7 @@ impl Renderer {
         let submission_index = self.pending[renders - 1].2.clone();
         let _ = device.poll(wgpu::PollType::Wait { submission_index, timeout: None });
         let mut short = None;
+        self.ran_out.clear();
         for (buf, mapped, _, one_off, rooms, least) in self.pending.drain(..renders).collect::<Vec<_>>() {
             if *mapped.lock().unwrap() != Some(true) {
                 return Err(Error::OutOfRoom);
@@ -615,7 +620,9 @@ impl Renderer {
                 bytemuck::pod_read_unaligned(&view)
             };
             buf.unmap();
-            if let Some(why) = fit(&bump, one_off, rooms, least) {
+            let fits = fit(&bump, one_off, rooms, least);
+            self.ran_out.push(fits.is_some());
+            if let Some(why) = fits {
                 short = Some(why);
             }
         }
@@ -931,6 +938,9 @@ pub fn reset_room() {
     for crossings in &vello_encoding::CROSSINGS {
         crossings.store(1f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
     }
+    for words in &PTCL_PER_TILE {
+        words.store(PTCL_PER_TILE_AT_FIRST.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
     *TAKEN.lock().unwrap() = [(0, None, 0); 7];
     *TAKEN_ONE_OFF.lock().unwrap() = [(0, None, 0); 7];
 }
@@ -949,6 +959,14 @@ fn size_class(x: u32) -> u32 {
     let step = (x.checked_next_power_of_two().unwrap_or(1 << 31) / 8).max(1);
     x.div_ceil(step).saturating_mul(step)
 }
+
+/// Ligma: command list words renders took for each tile, where both ran
+/// to the end, the most lately, coming down slowly, as what the command
+/// lists of one whose tiles ran out will take is known only from that
+static PTCL_PER_TILE: [std::sync::atomic::AtomicU32; 2] = [std::sync::atomic::AtomicU32::new(PTCL_PER_TILE_AT_FIRST.to_bits()), std::sync::atomic::AtomicU32::new(PTCL_PER_TILE_AT_FIRST.to_bits())];
+
+/// Ligma: about what views took
+const PTCL_PER_TILE_AT_FIRST: f32 = 6.0;
 
 /// Ligma: dev tools, what the last render checked took of each buffer
 pub static LAST_TOOK: std::sync::Mutex<[u32; 7]> = std::sync::Mutex::new([0; 7]);
@@ -975,6 +993,11 @@ fn fit(bump: &BumpAllocators, one_off: bool, had: [u32; 7], least: u32) -> Optio
         (first.min(stage), grow.max(*took as f64 / have.max(1) as f64 * 1.25))
     });
     let ran = |index: usize| stage[index] <= first;
+    if ran(1) && took[2] >= 1 << 16 {
+        let (was, now) = (f32::from_bits(PTCL_PER_TILE[one_off as usize].load(Relaxed)), took[1] as f32 / took[2] as f32);
+        let next = if now > was { now } else { was * 0.75 + now * 0.25 };
+        PTCL_PER_TILE[one_off as usize].store(next.clamp(1.0, 32.0).to_bits(), Relaxed);
+    }
     let mut short = (bump.failed != 0).then(|| format!("failed={:#x}", bump.failed));
     let mut too_big = false;
     let mut taken = if one_off { TAKEN_ONE_OFF.lock().unwrap() } else { TAKEN.lock().unwrap() };
@@ -1004,7 +1027,9 @@ fn fit(bump: &BumpAllocators, one_off: bool, had: [u32; 7], least: u32) -> Optio
         // Each segment counted is one written, and each line crosses as many
         // tiles as lines did lately, at least one
         let crossed = f32::from_bits(vello_encoding::CROSSINGS[one_off as usize].load(Relaxed));
+        let per_tile = f32::from_bits(PTCL_PER_TILE[one_off as usize].load(Relaxed));
         let need = |index: usize| match index {
+            1 if ran(2) => Some((took[2] as f32 * per_tile) as u32),
             4 if ran(3) => Some(took[3]),
             3 if ran(6) => Some(took[6].max((least as f32 * crossed) as u32)),
             _ => None,

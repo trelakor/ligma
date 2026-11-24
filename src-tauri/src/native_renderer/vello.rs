@@ -533,8 +533,11 @@ impl Vello {
         let _span = super::span::span("vello wait for GPU");
         let at = std::time::Instant::now();
         let fits = self.renderer.check(&self.device, renders).map_err(|error| format!("check: {error}"));
-        // Blurs drawn past their buffers' room are drawn again
-        if !matches!(fits, Ok(None)) {
+        // Blurs drawn past their buffers' room are drawn again. They're
+        // rendered before what they're drawn into, which alone running out
+        // leaves them as drawn
+        let only_last = matches!(fits, Ok(Some(_))) && self.renderer.ran_out.iter().rev().skip(1).all(|ran_out| !ran_out);
+        if !matches!(fits, Ok(None)) && !only_last {
             self.blurred_keys.clear();
         }
         self.waited = at.elapsed();
