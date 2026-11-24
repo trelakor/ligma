@@ -92,8 +92,9 @@ const SOLIDS = 4u;
 var<private> solid_mask: array<u32, 16>;
 var<private> solid_color: array<u32, 16>;
 // Ligma: those of what's under a clip or layer, while its own are kept in
-// their place, one deep
-var<private> outer_mask: array<u32, 16>;
+// their place, one deep. Masks only use MS_ALL's bits, so each word holds
+// two, the second shifted down by 4, to keep fewer registers live
+var<private> outer_mask: array<u32, 8>;
 var<private> outer_color: array<u32, 16>;
 // Ligma: bit i clear when pixel i has no opaque samples, so what would only
 // read or clear its solids can be skipped. Set, it may still have none
@@ -1343,6 +1344,20 @@ fn clear_solid(i: u32) {
 // those samples, and what isn't opaque its share of them
 fn take_samples(i: u32, fg: vec4<f32>, rgba: ptr<function, array<vec4<f32>, PIXELS_PER_THREAD>>) {
     let m = ms_mask[i];
+    // Ligma: over all samples, it's what the rest gives: every other solid
+    // loses all its samples, it goes in the last slot, and what isn't opaque
+    // has no share left, so the pixel is its color exactly
+    if m == MS_ALL {
+        let c = pack4x8unorm(vec4(fg.rgb, 1.0));
+        for (var j = 0u; j + 1u < SOLIDS; j += 1u) {
+            solid_mask[i * SOLIDS + j] = 0u;
+        }
+        solid_mask[i * SOLIDS + SOLIDS - 1u] = MS_ALL;
+        solid_color[i * SOLIDS + SOLIDS - 1u] = c;
+        solid_any |= 1u << i;
+        (*rgba)[i] = unpack4x8unorm(c);
+        return;
+    }
     let k = solid_samples(i);
     let open = 16.0 - f32(countOneBits(k));
     let rest = max((*rgba)[i] - solid_sum(i), vec4(0.0)) * select(0.0, (open - f32(countOneBits(m & ~k))) / open, open > 0.0);
@@ -1448,7 +1463,9 @@ fn main(
     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
         rgba[i] = base_color;
     }
-    var blend_stack: array<array<u32, PIXELS_PER_THREAD>, BLEND_STACK_SPLIT>;
+    // Ligma: a word for each of the 4 pixels, so a push or pop is one
+    // 16-byte access to the thread's local memory rather than four
+    var blend_stack: array<vec4<u32>, BLEND_STACK_SPLIT>;
     var clip_depth = 0u;
     // Ligma: the clip or layer under all others keeps its fills apart by
     // sample too, what's under it set aside meanwhile
@@ -1588,8 +1605,10 @@ fn main(
                         outer_any = solid_any;
                         for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                             if (solid_any & (1u << i)) != 0u {
+                                for (var j = 0u; j < SOLIDS; j += 2u) {
+                                    outer_mask[(i * SOLIDS + j) / 2u] = solid_mask[i * SOLIDS + j] | (solid_mask[i * SOLIDS + j + 1u] >> 4u);
+                                }
                                 for (var j = 0u; j < SOLIDS; j += 1u) {
-                                    outer_mask[i * SOLIDS + j] = solid_mask[i * SOLIDS + j];
                                     outer_color[i * SOLIDS + j] = solid_color[i * SOLIDS + j];
                                     solid_mask[i * SOLIDS + j] = 0u;
                                 }
@@ -1599,18 +1618,27 @@ fn main(
                     }
                 }
 #endif
+                var packed: vec4<u32>;
+                for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+                    packed[i] = pack4x8unorm(rgba[i]);
+                }
                 if clip_depth < BLEND_STACK_SPLIT {
-                    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
-                        blend_stack[clip_depth][i] = pack4x8unorm(rgba[i]);
-                        rgba[i] = select(vec4(0.0), unpack4x8unorm(blend_stack[clip_depth][i]), copy);
-                    }
+                    blend_stack[clip_depth] = packed;
                 } else {
                     let blend_in_scratch = clip_depth - BLEND_STACK_SPLIT;
                     let local_tile_ix = local_id.x * PIXELS_PER_THREAD + local_id.y * TILE_WIDTH;
                     let local_blend_start = blend_offset + blend_in_scratch * TILE_WIDTH * TILE_HEIGHT + local_tile_ix;
                     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
-                        blend_spill[local_blend_start + i] = pack4x8unorm(rgba[i]);
-                        rgba[i] = select(vec4(0.0), unpack4x8unorm(blend_spill[local_blend_start + i]), copy);
+                        blend_spill[local_blend_start + i] = packed[i];
+                    }
+                }
+                // Ligma: what was stored, without reading it back, and `copy`
+                // is the same for the whole tile so this doesn't diverge
+                for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+                    if copy {
+                        rgba[i] = unpack4x8unorm(packed[i]);
+                    } else {
+                        rgba[i] = vec4(0.0);
                     }
                 }
                 clip_depth += 1u;
@@ -1619,13 +1647,30 @@ fn main(
             case CMD_END_CLIP: {
                 let end_clip = read_end_clip(cmd_ix);
                 clip_depth -= 1u;
+                // Ligma: loaded before the solids are put back, so the load is
+                // in flight meanwhile
+                var bg_packed: vec4<u32>;
+                if clip_depth < BLEND_STACK_SPLIT {
+                    bg_packed = blend_stack[clip_depth];
+                } else {
+                    let blend_in_scratch = clip_depth - BLEND_STACK_SPLIT;
+                    let local_tile_ix = local_id.x * PIXELS_PER_THREAD + local_id.y * TILE_WIDTH;
+                    let local_blend_start = blend_offset + blend_in_scratch * TILE_WIDTH * TILE_HEIGHT + local_tile_ix;
+                    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+                        bg_packed[i] = blend_spill[local_blend_start + i];
+                    }
+                }
 #ifdef msaa16
                 if clip_depth == 0u && inner {
                     inner = false;
                     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                         if (outer_any & (1u << i)) != 0u {
+                            for (var j = 0u; j < SOLIDS; j += 2u) {
+                                let pair = outer_mask[(i * SOLIDS + j) / 2u];
+                                solid_mask[i * SOLIDS + j] = pair & MS_ALL;
+                                solid_mask[i * SOLIDS + j + 1u] = (pair << 4u) & MS_ALL;
+                            }
                             for (var j = 0u; j < SOLIDS; j += 1u) {
-                                solid_mask[i * SOLIDS + j] = outer_mask[i * SOLIDS + j];
                                 solid_color[i * SOLIDS + j] = outer_color[i * SOLIDS + j];
                             }
                         } else if (solid_any & (1u << i)) != 0u {
@@ -1636,16 +1681,7 @@ fn main(
                 }
 #endif
                 for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
-                    var bg_rgba: u32;
-                    if clip_depth < BLEND_STACK_SPLIT {
-                        bg_rgba = blend_stack[clip_depth][i];
-                    } else {
-                        let blend_in_scratch = clip_depth - BLEND_STACK_SPLIT;
-                        let local_tile_ix = local_id.x * PIXELS_PER_THREAD + local_id.y * TILE_WIDTH;
-                        let local_blend_start = blend_offset + blend_in_scratch * TILE_WIDTH * TILE_HEIGHT + local_tile_ix;
-                        bg_rgba = blend_spill[local_blend_start + i];
-                    }
-                    let bg = unpack4x8unorm(bg_rgba);
+                    let bg = unpack4x8unorm(bg_packed[i]);
 #ifdef msaa16
                     // Ligma: opaque over the pixel, it takes the place of
                     // the samples its shape covers, as an opaque fill does
