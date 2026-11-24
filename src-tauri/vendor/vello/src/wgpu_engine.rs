@@ -50,6 +50,26 @@ pub(crate) struct WgpuEngine {
     timer_tried: bool,
     /// Ligma: the last recording's submission
     pub(crate) submitted: Option<wgpu::SubmissionIndex>,
+    bind_groups: BindGroups,
+}
+
+/// Ligma: bind groups kept by shader and the buffers they bind, made once
+/// rather than for each dispatch as the pool hands a render the same buffers
+/// each time. None binding an image is kept, and none past a buffer of its
+/// being destroyed or `POOL_KEPT` recordings unused, so none holds a buffer
+/// that'd otherwise be gone for long
+#[derive(Default)]
+struct BindGroups {
+    kept: HashMap<(usize, Vec<(Buffer, u64, u64)>), (BindGroup, u64)>,
+}
+
+/// Ligma: most bind groups kept at once
+const BIND_GROUPS_KEPT: usize = 256;
+
+impl BindGroups {
+    fn forget(&mut self, buf: &Buffer) {
+        self.kept.retain(|(_, bufs), _| bufs.iter().all(|(kept, ..)| kept != buf));
+    }
 }
 
 /// Dev tools: time `run_recording` took by part, in ns
@@ -158,13 +178,19 @@ struct Staging {
 }
 
 impl Staging {
+    /// Whether `upload` would copy `bytes` with the encoder
+    fn takes(bytes: &[u8]) -> bool {
+        let len = bytes.len() as u64;
+        len >= 1 << 18 && len % wgpu::COPY_BUFFER_ALIGNMENT == 0
+    }
+
     /// Writes `bytes` into a mapped buffer copied from into `buf`, false
     /// where it can't
     fn upload(&mut self, device: &Device, encoder: &mut CommandEncoder, buf: &Buffer, bytes: &[u8]) -> bool {
-        let len = bytes.len() as u64;
-        if len < 1 << 18 || len % wgpu::COPY_BUFFER_ALIGNMENT != 0 {
+        if !Self::takes(bytes) {
             return false;
         }
+        let len = bytes.len() as u64;
         self.free.append(&mut self.ready.lock().unwrap());
         let staging = match self.free.iter().enumerate().filter(|(_, b)| b.size() >= len).min_by_key(|(_, b)| b.size()) {
             Some((index, _)) => self.free.swap_remove(index),
@@ -311,6 +337,7 @@ impl WgpuEngine {
             buf.destroy();
         }
         self.pool.most.clear();
+        self.bind_groups.kept.clear();
         self.staging.free.clear();
         self.staging.ready.lock().unwrap().clear();
     }
@@ -572,6 +599,13 @@ impl WgpuEngine {
             device.create_command_encoder(&CommandEncoderDescriptor { label: Some(label) });
         #[cfg(feature = "wgpu-profiler")]
         let query = profiler.begin_query(label, &mut encoder);
+        // Ligma: dispatches share a compute pass until something else needs
+        // the encoder, wgpu putting the barriers each needs between them as
+        // it does between passes, as `finish` makes and closes two D3D12
+        // command lists for each pass. Timed, each has a pass of its own
+        let merge = self.timer.is_none() && cfg!(not(feature = "wgpu-profiler"));
+        let mut pass: Option<wgpu::ComputePass<'static>> = None;
+        let recordings = self.pool.recordings;
         let mut lap = std::time::Instant::now();
         for command in &recording.commands {
             let part = match command {
@@ -594,6 +628,9 @@ impl WgpuEngine {
                     let buf = self
                         .pool
                         .get_buf(buf_proxy.size, buf_proxy.name, usage, device);
+                    if Staging::takes(bytes) {
+                        pass = None;
+                    }
                     if !self.staging.upload(device, &mut encoder, &buf, bytes) {
                         queue.write_buffer(&buf, 0, bytes);
                     }
@@ -670,6 +707,7 @@ impl WgpuEngine {
                         .block_copy_size(None)
                         .expect("ImageFormat must have a valid block size");
                     if let Some(overrider) = self.image_overrides.get(&image.data.id()) {
+                        pass = None;
                         encoder.copy_texture_to_texture(
                             wgpu::TexelCopyTextureInfo {
                                 texture: &overrider.texture,
@@ -742,6 +780,9 @@ impl WgpuEngine {
                             if x == 0 || y == 0 || z == 0 {
                                 continue;
                             }
+                            if BindMap::clears(&self.bind_map, bindings) {
+                                pass = None;
+                            }
                             let bind_group = transient_map.create_bind_group(
                                 &mut self.bind_map,
                                 &mut self.pool,
@@ -750,14 +791,18 @@ impl WgpuEngine {
                                 &mut encoder,
                                 &wgpu_shader.bind_group_layout,
                                 bindings,
+                                Some((&mut self.bind_groups, shader_id.0, recordings)),
                             );
-                            let mut cpass = match &mut self.timer {
-                                Some(timer) => encoder.begin_compute_pass(&timer.pass(shader.label)),
-                                None => encoder.begin_compute_pass(&ComputePassDescriptor::default()),
-                            };
+                            if pass.is_none() {
+                                pass = Some(match &mut self.timer {
+                                    Some(timer) => encoder.begin_compute_pass(&timer.pass(shader.label)),
+                                    None => encoder.begin_compute_pass(&ComputePassDescriptor::default()),
+                                }.forget_lifetime());
+                            }
+                            let cpass = pass.as_mut().unwrap();
                             #[cfg(feature = "wgpu-profiler")]
                             let query = profiler
-                                .begin_query(shader.label, &mut cpass)
+                                .begin_query(shader.label, cpass)
                                 .with_parent(Some(&query));
                             #[cfg_attr(
                                 not(feature = "debug_layers"),
@@ -773,7 +818,10 @@ impl WgpuEngine {
                             cpass.set_bind_group(0, &bind_group, &[]);
                             cpass.dispatch_workgroups(x, y, z);
                             #[cfg(feature = "wgpu-profiler")]
-                            profiler.end_query(&mut cpass, query);
+                            profiler.end_query(cpass, query);
+                            if !merge {
+                                pass = None;
+                            }
                         }
                     }
                 }
@@ -795,6 +843,9 @@ impl WgpuEngine {
                             (cpu_shader.shader)(n_wg, &resources);
                         }
                         ShaderKind::Wgpu(wgpu_shader) => {
+                            if BindMap::clears(&self.bind_map, bindings) {
+                                pass = None;
+                            }
                             let bind_group = transient_map.create_bind_group(
                                 &mut self.bind_map,
                                 &mut self.pool,
@@ -803,6 +854,7 @@ impl WgpuEngine {
                                 &mut encoder,
                                 &wgpu_shader.bind_group_layout,
                                 bindings,
+                                Some((&mut self.bind_groups, shader_id.0, recordings)),
                             );
                             transient_map.materialize_gpu_buf_for_indirect(
                                 &mut self.bind_map,
@@ -811,13 +863,16 @@ impl WgpuEngine {
                                 queue,
                                 proxy,
                             );
-                            let mut cpass = match &mut self.timer {
-                                Some(timer) => encoder.begin_compute_pass(&timer.pass(shader.label)),
-                                None => encoder.begin_compute_pass(&ComputePassDescriptor::default()),
-                            };
+                            if pass.is_none() {
+                                pass = Some(match &mut self.timer {
+                                    Some(timer) => encoder.begin_compute_pass(&timer.pass(shader.label)),
+                                    None => encoder.begin_compute_pass(&ComputePassDescriptor::default()),
+                                }.forget_lifetime());
+                            }
+                            let cpass = pass.as_mut().unwrap();
                             #[cfg(feature = "wgpu-profiler")]
                             let query = profiler
-                                .begin_query(shader.label, &mut cpass)
+                                .begin_query(shader.label, cpass)
                                 .with_parent(Some(&query));
                             #[cfg_attr(
                                 not(feature = "debug_layers"),
@@ -836,7 +891,10 @@ impl WgpuEngine {
                             )?;
                             cpass.dispatch_workgroups_indirect(buf, *offset);
                             #[cfg(feature = "wgpu-profiler")]
-                            profiler.end_query(&mut cpass, query);
+                            profiler.end_query(cpass, query);
+                            if !merge {
+                                pass = None;
+                            }
                         }
                     }
                 }
@@ -848,6 +906,7 @@ impl WgpuEngine {
                     let ShaderKind::Wgpu(shader) = shader.select() else {
                         panic!("a render pass does not have a CPU equivalent");
                     };
+                    pass = None;
                     let bind_group = transient_map.create_bind_group(
                         &mut self.bind_map,
                         &mut self.pool,
@@ -856,6 +915,7 @@ impl WgpuEngine {
                         &mut encoder,
                         &shader.bind_group_layout,
                         &draw_params.resources,
+                        None,
                     );
                     let render_target = transient_map
                         .materialize_external_image_for_render_pass(&draw_params.target);
@@ -912,13 +972,17 @@ impl WgpuEngine {
                         .ok_or(Error::UnavailableBufferUsed(proxy.name, "download"))?;
                     let usage = BufferUsages::MAP_READ | BufferUsages::COPY_DST;
                     let buf = self.pool.get_buf(proxy.size, "download", usage, device);
+                    pass = None;
                     encoder.copy_buffer_to_buffer(src_buf, 0, &buf, 0, proxy.size);
                     self.downloads.insert(proxy.id, buf);
                 }
                 Command::Clear(proxy, offset, size) => {
                     if let Some(buf) = self.bind_map.get_buf(*proxy) {
                         match &buf.buffer {
-                            MaterializedBuffer::Gpu(b) => encoder.clear_buffer(b, *offset, *size),
+                            MaterializedBuffer::Gpu(b) => {
+                                pass = None;
+                                encoder.clear_buffer(b, *offset, *size);
+                            }
                             MaterializedBuffer::Cpu(b) => {
                                 let mut slice = &mut b.borrow_mut()[*offset as usize..];
                                 if let Some(size) = size {
@@ -939,6 +1003,7 @@ impl WgpuEngine {
                 }
             }
         }
+        drop(pass);
         #[cfg(feature = "wgpu-profiler")]
         profiler.end_query(&mut encoder, query);
         // TODO: This only actually needs to happen once per frame, but run_recording happens two or three times
@@ -969,6 +1034,7 @@ impl WgpuEngine {
                 if bufs.len() > 1 {
                     bufs.sort_by_key(|(buf, _)| std::cmp::Reverse(buf.size()));
                     for (buf, _) in bufs.drain(1..) {
+                        self.bind_groups.forget(&buf);
                         buf.destroy();
                     }
                 }
@@ -983,6 +1049,7 @@ impl WgpuEngine {
             bufs.retain(|(buf, at)| {
                 let keep = at + POOL_KEPT > recordings && buf.size() <= most.saturating_mul(2);
                 if !keep {
+                    self.bind_groups.forget(buf);
                     buf.destroy();
                 }
                 keep
@@ -990,6 +1057,7 @@ impl WgpuEngine {
         }
         self.pool.bufs.retain(|_, bufs| !bufs.is_empty());
         self.pool.most.retain(|_, (_, at)| *at + POOL_KEPT > recordings);
+        self.bind_groups.kept.retain(|_, (_, at)| *at + POOL_KEPT > recordings);
         for id in free_images {
             if let Some((texture, _view)) = self.bind_map.image_map.remove(&id) {
                 // TODO: have a pool to avoid needless re-allocation
@@ -1105,6 +1173,15 @@ impl WgpuEngine {
 }
 
 impl BindMap {
+    /// Ligma: whether binding `bindings` clears a buffer with the encoder
+    fn clears(&self, bindings: &[ResourceProxy]) -> bool {
+        !self.pending_clears.is_empty()
+            && bindings.iter().any(|binding| match binding {
+                ResourceProxy::Buffer(proxy) | ResourceProxy::BufferRange { proxy, .. } => self.pending_clears.contains(&proxy.id),
+                ResourceProxy::Image(_) => false,
+            })
+    }
+
     fn insert_buf(&mut self, proxy: &BufferProxy, buffer: Buffer) {
         self.buf_map.insert(
             proxy.id,
@@ -1313,6 +1390,7 @@ impl<'a> TransientBindMap<'a> {
         encoder: &mut CommandEncoder,
         layout: &BindGroupLayout,
         bindings: &[ResourceProxy],
+        kept: Option<(&mut BindGroups, usize, u64)>,
     ) -> BindGroup {
         for proxy in bindings {
             match proxy {
@@ -1383,6 +1461,31 @@ impl<'a> TransientBindMap<'a> {
                 }
             }
         }
+        // Ligma: keyed by the buffers bound, the shader's layout and what
+        // they're bound as being the same each time it's used
+        let mut kept = kept.and_then(|(kept, shader, recording)| {
+            let bufs = bindings
+                .iter()
+                .map(|binding| {
+                    let (proxy, offset, size) = match binding {
+                        ResourceProxy::Buffer(proxy) => (proxy, 0, 0),
+                        ResourceProxy::BufferRange { proxy, offset, size } => (proxy, *offset, *size),
+                        ResourceProxy::Image(_) => return None,
+                    };
+                    match self.bufs.get(&proxy.id) {
+                        Some(TransientBuf::Gpu(_)) => None,
+                        _ => Some((bind_map.get_gpu_buf(proxy.id)?.clone(), offset, size)),
+                    }
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some((kept, (shader, bufs), recording))
+        });
+        if let Some((cache, key, recording)) = &mut kept
+            && let Some((bind_group, at)) = cache.kept.get_mut(&*key)
+        {
+            *at = *recording;
+            return bind_group.clone();
+        }
         let entries = bindings
             .iter()
             .enumerate()
@@ -1429,11 +1532,18 @@ impl<'a> TransientBindMap<'a> {
                 }
             })
             .collect::<Vec<_>>();
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout,
             entries: &entries,
-        })
+        });
+        if let Some((cache, key, recording)) = kept {
+            if cache.kept.len() >= BIND_GROUPS_KEPT {
+                cache.kept.clear();
+            }
+            cache.kept.insert(key, (bind_group.clone(), recording));
+        }
+        bind_group
     }
 
     fn create_cpu_resources(
