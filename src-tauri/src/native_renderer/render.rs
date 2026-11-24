@@ -4692,9 +4692,41 @@ impl Painter {
                     }
                 }
             }
+            // Two or more each handed to the GPU and kept as soon as it's
+            // encoded, and checked once, so each is encoded while the GPU
+            // draws the one before rather than after it. Any that ran out
+            // or failed, all drawn again one at a time below
+            let todo: Vec<(usize, usize, usize)> = (0..3).filter(|&index| !keep[index]).filter_map(|index| layers[index].map(|(from, to, _)| (index, from, to))).collect();
+            let mut batched = [false; 3];
+            if todo.len() > 1 {
+                let mut sent = true;
+                for &(index, from, to) in &todo {
+                    self.only = Some((from, to));
+                    self.blur_view = Some(vello::kurbo::Rect::new(0.0, 0.0, width as f64, height as f64));
+                    let rendered = self.vello_render(ox, oy, phase, width, height, px, reach.with_outset((2.0 / px, 2.0 / px)), None, false, None);
+                    self.blur_view = None;
+                    sent = rendered.is_ok() && self.vello.as_mut().is_some_and(|vello| vello.keep(index, &self.gpu.device, width, height).is_ok());
+                    if !sent {
+                        break;
+                    }
+                }
+                self.only = None;
+                if sent {
+                    match self.vello.as_mut().map(|vello| vello.check(usize::MAX)) {
+                        Some(Ok(None)) => {
+                            for &(index, ..) in &todo {
+                                batched[index] = true;
+                                (sharp[index], built_at[index]) = (sharper[index], Instant::now());
+                            }
+                        }
+                        Some(Ok(Some(why))) => trace(|| format!("  vello ran out of room, drawing each layer again: {why}")),
+                        _ => {}
+                    }
+                }
+            }
             for (index, layer) in layers.iter().enumerate() {
                 let Some((from, to, _)) = *layer else { continue };
-                if keep[index] {
+                if keep[index] || batched[index] {
                     continue;
                 }
                 self.only = Some((from, to));
@@ -4786,7 +4818,18 @@ impl Painter {
         let mut copy = Paint::default();
         copy.set_blend_mode(skia_safe::BlendMode::Src);
         if let Some(previous) = &previous {
-            surface.canvas().draw_image(previous, (0, 0), Some(&copy));
+            // Only what the patches leave, as each is drawn over whole. Vello
+            // waits for what Skia's submitted before it starts, so copying
+            // all of it held up the render by the copy
+            let mut left = skia_safe::Region::new();
+            left.set_rect(skia_safe::IRect::from_wh(width, height));
+            for rect in rects {
+                left.op_rect(*rect, skia_safe::region::RegionOp::Difference);
+            }
+            for part in skia_safe::region::Iterator::new(&left) {
+                let part = Rect::from(part);
+                surface.canvas().draw_image_rect(previous, Some((&part, skia_safe::canvas::SrcRectConstraint::Fast)), part, &copy);
+            }
         }
         let (mut waited, mut stats) = (Duration::ZERO, String::new());
         for rect in rects {
@@ -4797,7 +4840,7 @@ impl Painter {
                 self.over_at = over.then_some((rect.left as u32, rect.top as u32));
                 self.mid_at = mid.map(|mid| ((rect.left as u32, rect.top as u32), mid));
             }
-            let mut drawn = None;
+            let mut drawn = false;
             for _ in 0..8 {
                 // Blurs are drawn from all of the whole view, the same for
                 // each patch, so drawn once
@@ -4807,6 +4850,13 @@ impl Painter {
                 let Ok((out, _, made, _)) = rendered else {
                     break;
                 };
+                // Into a copy, copied in before Vello's checked rather than
+                // after: Skia's queue waits for Vello's render anyway, so the
+                // GPU copies it as Vello's done, not once this thread's woken
+                // and drawn it. Where it ran out of room the next try draws
+                // over it, and where none fits the copy's never shown. Not
+                // in place, as a whole view gone stale is still shown
+                let early = !in_place && Self::blit(&mut self.gpu.context, &mut surface, &out, rect, &copy);
                 let Some(vello) = self.vello.as_mut() else { break };
                 let checked = vello.check(usize::MAX);
                 waited += vello.waited;
@@ -4814,7 +4864,7 @@ impl Painter {
                 match checked {
                     Ok(None) => {
                         stats = format!("{made} gpu:{stages}");
-                        drawn = Some(out);
+                        drawn = early || Self::blit(&mut self.gpu.context, &mut surface, &out, rect, &copy);
                         break;
                     }
                     Ok(Some(why)) if !why.starts_with("too big") => trace(|| format!("  vello ran out of room, drawing again: {why}")),
@@ -4825,8 +4875,7 @@ impl Painter {
             self.under_at = None;
             self.over_at = None;
             self.mid_at = None;
-            let image = drawn.and_then(|out| gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None));
-            let Some(image) = image else {
+            if !drawn {
                 // What's drawn into it so far is never shown
                 drop(surface);
                 let _ = self.gpu.context.flush_and_submit();
@@ -4836,11 +4885,7 @@ impl Painter {
                     whole.stale = true;
                 }
                 return false;
-            };
-            let from = Rect::from_wh(rect.width() as f32, rect.height() as f32);
-            surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from(*rect), &copy);
-            // Drawn from Vello's target before its next render draws into it
-            let _ = self.gpu.context.flush_and_submit();
+            }
         }
         let image = self.finish(&backend, false);
         drop(surface);
@@ -4871,6 +4916,19 @@ impl Painter {
             format!("  patch vello rects={rects:?} over={strata:?} waited={:.1}ms {:.1}ms {stats}", waited.as_secs_f64() * 1000.0, started.elapsed().as_secs_f64() * 1000.0)
         });
         self.drew = true;
+        true
+    }
+
+    /// What Vello drew into `out`, unpremultiplied, drawn over `rect` of
+    /// `surface` and submitted, so it's read before Vello's next render
+    /// draws into it. False if Skia can't read it
+    fn blit(context: &mut DirectContext, surface: &mut Surface, out: &Tex, rect: &skia_safe::IRect, copy: &Paint) -> bool {
+        let Some(image) = gpu::images::borrow_texture_from(context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None) else {
+            return false;
+        };
+        let from = Rect::from_wh(rect.width() as f32, rect.height() as f32);
+        surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from(*rect), copy);
+        let _ = context.flush_and_submit();
         true
     }
 

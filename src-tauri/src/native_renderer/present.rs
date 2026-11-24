@@ -452,6 +452,24 @@ pub struct Piece {
     pub square: bool,
 }
 
+/// What decides a frame's pixels but for its view, what's over it and its
+/// size: the frame of Figma's, how far the view's moved on from it, the
+/// background, and each piece's texture as of when it was drawn and where
+/// it goes. Layers only marked out of date look the same
+type Look = (u64, (u32, u32), [u32; 4], bool, bool, Vec<(usize, u64, [u32; 4], Vec<skia_safe::IRect>, bool)>);
+
+fn look_of(snapshot: &Snapshot, pieces: &[Piece], seq: u64, ahead: (f32, f32)) -> Look {
+    let pieces = pieces
+        .iter()
+        .map(|piece| {
+            let layer = &snapshot.layers[piece.layer];
+            let dest = [piece.dest.left, piece.dest.top, piece.dest.right, piece.dest.bottom].map(f32::to_bits);
+            (Arc::as_ptr(&layer.tex) as usize, layer.drawn, dest, skia_safe::region::Iterator::new(&piece.clip).collect(), piece.square)
+        })
+        .collect();
+    (seq, (ahead.0.to_bits(), ahead.1.to_bits()), snapshot.background.as_array().map(f32::to_bits), snapshot.transparent, snapshot.dark, pieces)
+}
+
 /// What a frame of `view` in a window `size` is composed of: `layers`
 /// nearest what Figma shows first, the tiles of its zoom, then the whole
 /// view drawn at it, then the rest, scaled, each where those before don't
@@ -1665,6 +1683,9 @@ impl Screen {
         let mut room = false;
         // Since when the view's waited for what it needs drawn
         let mut held: Option<Instant> = None;
+        // What the last frame shown whole looked like, and what was shown
+        // as of it, see `Look`
+        let mut look: Option<(Look, (u64, View, Option<u32>, (u32, u32)))> = None;
         while !hub.stop.load(Ordering::Relaxed) {
             if !room {
                 let waiting = Instant::now();
@@ -1701,6 +1722,7 @@ impl Screen {
                     log::warn!("native renderer: {error}");
                 }
                 shown = None;
+                look = None;
             }
             if self.layer.is_some() {
                 let showing = hub.origin.lock().unwrap().as_ref().map(|(tab, _)| tab.clone());
@@ -1724,6 +1746,7 @@ impl Screen {
                     self.tab_drawn();
                     room = false;
                     shown = Some((kept.serial, kept_view.clone(), None, self.size));
+                    look = None;
                     complete = Some(kept);
                     complete_view = Some(kept_view);
                     continue;
@@ -1737,6 +1760,7 @@ impl Screen {
                 let at = placed(&hub, &view);
                 if self.place(at) {
                     shown = None;
+                    look = None;
                 }
                 self.pan.canvas = at.map(|(x, y)| (self.window, (x, y, self.size.0 as i32, self.size.1 as i32)));
             }
@@ -1819,6 +1843,7 @@ impl Screen {
                     self.frame(partial.as_ref().unwrap_or(&snapshot), &pieces, &view, overlay.as_ref(), seq);
                     room = false;
                     shown = Some(now);
+                    look = None;
                     continue;
                 }
                 if let Some((merged, pieces)) = merged {
@@ -1828,6 +1853,7 @@ impl Screen {
                     self.frame(&merged, &pieces, &view, overlay.as_ref(), seq);
                     room = false;
                     shown = Some(now);
+                    look = None;
                     continue;
                 }
                 let before = complete.clone().filter(|before| before.serial != snapshot.serial && before.tab == snapshot.tab).and_then(|before| {
@@ -1864,14 +1890,33 @@ impl Screen {
                 self.frame(&before, &pieces, &view, overlay.as_ref(), seq);
                 room = false;
                 shown = Some(then);
+                look = None;
                 continue;
             }
             held = None;
             hub.shown_seq.store(seq, Ordering::Relaxed);
+            // The same pixels as on screen aren't presented again, as when
+            // an edit's handed over before it's drawn and its layer's only
+            // marked out of date, which took the GPU as it began drawing it
+            let looks = look_of(&snapshot, &pieces, seq, self.ahead_px);
+            let same = look.as_ref().is_some_and(|(was, at)| shown.as_ref() == Some(at) && (&at.1, at.2, at.3) == (&now.1, now.2, now.3) && *was == looks);
+            if same && *hub.whole_tab.lock().unwrap() == snapshot.tab {
+                if self.owed.take().is_some() {
+                    self.timed = seq;
+                }
+                look = Some((looks, now.clone()));
+                shown = Some(now);
+                complete_view = Some(view.clone());
+                complete = Some(snapshot);
+                let timeout = wait.into_iter().chain(wake).min().unwrap_or(Duration::from_millis(100));
+                seen = hub.wait(seen, timeout.clamp(Duration::from_millis(1), Duration::from_millis(100)));
+                continue;
+            }
             PATH.store(0, Ordering::Relaxed);
             self.frame(&snapshot, &pieces, &view, overlay.as_ref(), seq);
             complete_view = Some(view.clone());
             room = false;
+            look = Some((looks, now.clone()));
             shown = Some(now);
             let mut whole_tab = hub.whole_tab.lock().unwrap();
             if *whole_tab != snapshot.tab {
@@ -1881,6 +1926,7 @@ impl Screen {
                 // again next, as the layer shows nothing till then
                 if self.layer.is_some() && self.place(placed(&hub, &view)) {
                     shown = None;
+                    look = None;
                 }
                 self.tab_drawn();
             }
