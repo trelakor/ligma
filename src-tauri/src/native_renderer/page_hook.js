@@ -385,20 +385,14 @@
         page: pageSince(),
       }),
     );
-    const parts = forestParts(f.renderTreeForest);
-    const length = forestLength(f.renderTreeForest);
-    const body = new Uint8Array(4 + header.length + length + ui.length);
-    new DataView(body.buffer).setUint32(0, header.length, true);
-    body.set(header, 4);
-    let at = 4 + header.length;
-    for (const part of parts) {
-      body.set(part, at);
-      at += part.length;
-    }
-    body.set(ui, at);
+    const lead = new Uint8Array(4);
+    new DataView(lead.buffer).setUint32(0, header.length, true);
+    // Written from where Figma left them, not copied into one buffer first,
+    // which for a whole scene held the page up for tens of milliseconds
+    const chunks = [lead, header, ...forestParts(f.renderTreeForest), ui];
     hook.sent++;
-    if (ring(body)) return;
-    fetch(location.origin + hook.pushTo + `f${session}-${seq}`, { method: "POST", body, cache: "no-store", credentials: "omit" })
+    if (ring(chunks)) return;
+    fetch(location.origin + hook.pushTo + `f${session}-${seq}`, { method: "POST", body: new Blob(chunks), cache: "no-store", credentials: "omit" })
       .then((response) => {
         if (response.status !== 204) throw new Error(`${response.status}`);
       })
@@ -421,9 +415,27 @@
     positions[0] = positions[1];
     shared = { positions, bytes: new Uint8Array(buffer, RING_HEADER), view: new DataView(buffer, RING_HEADER), capacity: buffer.byteLength - RING_HEADER };
   });
-  function ring(body) {
+  function ring(chunks) {
     if (!shared) return false;
     const { positions, bytes, view, capacity } = shared;
+    const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    // Where the next byte to write is: in which chunk, and how far into it
+    let chunk = 0;
+    let within = 0;
+    const copy = (count, to) => {
+      while (count > 0) {
+        const from = chunks[chunk];
+        const take = Math.min(count, from.length - within);
+        if (take > 0) bytes.set(within === 0 && take === from.length ? from : from.subarray(within, within + take), to);
+        to += take;
+        count -= take;
+        within += take;
+        if (within >= from.length) {
+          chunk++;
+          within = 0;
+        }
+      }
+    };
     let offset = 0;
     let waiting = 0;
     let read = positions[1];
@@ -432,7 +444,7 @@
       const at = written % capacity;
       const free = capacity - (written - positions[1]);
       const end = capacity - at;
-      const rest = body.length - offset;
+      const rest = length - offset;
       // Too little before the end for a part worth writing
       if (end - 8 < Math.min(rest, 4096) && free >= end) {
         if (end >= 8) view.setUint32(at, 0xffffffff, true);
@@ -456,11 +468,11 @@
         continue;
       }
       view.setUint32(at, part, true);
-      view.setUint32(at + 4, (offset + part < body.length ? 1 : 0) | (offset ? 2 : 0), true);
-      bytes.set(body.subarray(offset, offset + part), at + 8);
+      view.setUint32(at + 4, (offset + part < length ? 1 : 0) | (offset ? 2 : 0), true);
+      copy(part, at + 8);
       positions[0] = written + 8 + Math.ceil(part / 8) * 8;
       offset += part;
-    } while (offset < body.length);
+    } while (offset < length);
     hook.ringed++;
     return true;
   }
