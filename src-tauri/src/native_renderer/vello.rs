@@ -1893,6 +1893,9 @@ pub struct Encoder<'a> {
     pub kinds: std::collections::BTreeMap<&'static str, (u32, i64, u32)>,
     /// Cuts each thing drawn, in device pixels (see `soften`)
     soft: Option<Path>,
+    /// The soft clip Vello has a clip layer open for, which fills in a row
+    /// under it go in (see `fill_shape`)
+    cutting: Option<Path>,
     /// The soft clip to put back as each layer's popped
     /// The clip before each layer or clip, and whether Vello has a layer
     /// for it
@@ -1986,6 +1989,7 @@ impl<'a> Encoder<'a> {
             failed: None,
             fell_back: 0,
             soft: None,
+            cutting: None,
             saved: Vec::new(),
             cuts: None,
             inexact: 0,
@@ -2068,6 +2072,7 @@ impl<'a> Encoder<'a> {
     /// cut by that too, as what's in it is drawn alone
     #[track_caller]
     fn push(&mut self, mode: BlendMode, alpha: f32, bounds: Rect) -> bool {
+        self.uncut();
         count_layer();
         let Some(device) = self.device(bounds) else { return false };
         if switches().nolayers {
@@ -2098,6 +2103,7 @@ impl<'a> Encoder<'a> {
     /// as a fill's, and cut by the soft clip too as `push`'s is
     #[track_caller]
     fn push_shaped(&mut self, mode: BlendMode, shape: Path) -> bool {
+        self.uncut();
         count_layer();
         if switches().nolayers {
             self.saved.push((self.soft.take(), false));
@@ -2120,6 +2126,7 @@ impl<'a> Encoder<'a> {
     /// where there's no soft clip. False where there is
     #[track_caller]
     fn clip_outside(&mut self, shape: &Path, device: IRect) -> bool {
+        self.uncut();
         count_layer();
         if self.soft.is_some() {
             return false;
@@ -2133,6 +2140,7 @@ impl<'a> Encoder<'a> {
 
     #[track_caller]
     fn clip(&mut self, device: Path) {
+        self.uncut();
         count_layer();
         let _t = timer(10);
         let saved = self.soft.take();
@@ -2150,6 +2158,7 @@ impl<'a> Encoder<'a> {
     }
 
     fn pop(&mut self) {
+        self.uncut();
         let Some((soft, layer)) = self.saved.pop() else { return };
         if layer {
             self.scene.pop_layer();
@@ -2315,14 +2324,30 @@ impl<'a> Encoder<'a> {
             KINDS[self.kind * 2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             KINDS[self.kind * 2 + 1].fetch_add(lines, std::sync::atomic::Ordering::Relaxed);
         }
-        match &self.soft {
+        // Fills in a row under the soft clip are cut by it as one. Cut each
+        // on its own, a pixel at its edge shows what's under the last fill
+        // as much as it shows that fill, as with a white fill under a
+        // gradient's, a light line along the edge. A fill goes over what's
+        // drawn as it is, so they draw the same otherwise
+        match self.soft.clone() {
             Some(soft) => {
-                SIZES[16].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                self.scene.push_clip_layer(fill_of(soft), Affine::IDENTITY, &bez(soft));
-                self.scene.fill(style, transform, brush, brush_transform, shape);
-                self.scene.pop_layer();
+                if !self.cutting.as_ref().is_some_and(|cutting| cutting.generation_id() == soft.generation_id() || *cutting == soft) {
+                    self.uncut();
+                    SIZES[16].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.scene.push_clip_layer(fill_of(&soft), Affine::IDENTITY, &bez(&soft));
+                    self.cutting = Some(soft);
+                }
             }
-            None => self.scene.fill(style, transform, brush, brush_transform, shape),
+            None => self.uncut(),
+        }
+        self.scene.fill(style, transform, brush, brush_transform, shape);
+    }
+
+    /// Ends the clip layer fills under the soft clip are drawn in, as
+    /// anything else drawn goes in after it
+    fn uncut(&mut self) {
+        if self.cutting.take().is_some() {
+            self.scene.pop_layer();
         }
     }
 
@@ -2332,6 +2357,7 @@ impl<'a> Encoder<'a> {
         self.shows = self.px.map_or(2.0, |px| (px / scale).clamp(1.0, 2.0));
         let mut post = Matrix::scale((scale, scale));
         post.pre_translate((-origin.0, -origin.1));
+        self.uncut();
         let scene = std::mem::replace(&mut self.scene, vello::Scene::new());
         let (asked, counts, pictures) = (std::mem::take(&mut self.asked), std::mem::take(&mut self.counts), std::mem::take(&mut self.pictures));
         let effects = std::mem::take(&mut self.effects);
@@ -2385,6 +2411,7 @@ impl<'a> Encoder<'a> {
         }
         self.m = Matrix::concat(post, &place.at);
         self.draw(place.id);
+        self.uncut();
         for _ in 0..clips {
             self.pop();
         }
@@ -2896,8 +2923,10 @@ impl<'a> Encoder<'a> {
                 }
                 let mut brush = ramp.clone();
                 brush.kind = peniko::GradientKind::Linear(peniko::LinearGradientPosition::new((0.5, 0.5), (0.5 + 0.25 * sx, 0.5 + 0.25 * sy)));
+                self.uncut();
                 self.scene.push_layer(Fill::NonZero, BlendMode::new(Mix::Normal, Compose::Plus), 1.0, to_device, &quarter);
                 self.fill(fill_of(skia), affine(&self.m), &peniko::Brush::Gradient(brush), Some(local), path);
+                self.uncut();
                 self.scene.pop_layer();
             }
             self.pop();
@@ -3389,6 +3418,7 @@ impl<'a> Encoder<'a> {
     /// what's under it in the layer it's in
     fn push_luminance(&mut self, bounds: Rect) -> bool {
         let Some(device) = self.device(bounds) else { return false };
+        self.uncut();
         let rect = kurbo::Rect::new(device.left as f64, device.top as f64, device.right as f64, device.bottom as f64);
         self.scene.push_luminance_mask_layer(Fill::NonZero, 1.0, Affine::IDENTITY, &rect);
         SIZES[17].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -3485,10 +3515,12 @@ impl<'a> Encoder<'a> {
             let spread = (0.5 * *push as f32 * self.scale() * std::f32::consts::SQRT_2).ceil() as i32 + 2;
             self.view = view.with_outset((spread, spread));
         }
+        self.uncut();
         let scene = std::mem::replace(&mut self.scene, vello::Scene::new());
         let effects = std::mem::take(&mut self.effects);
         let soft = self.soft.take();
         self.draw(child);
+        self.uncut();
         self.soft = soft;
         self.view = view;
         let source = std::mem::replace(&mut self.scene, scene);
@@ -3577,10 +3609,12 @@ impl<'a> Encoder<'a> {
         let within = self.within;
         let spread = 3.0 * sigma * sx.max(sy) + 2.0;
         self.within = within.map(|within| within.with_outset((spread, spread)));
+        self.uncut();
         let scene = std::mem::replace(&mut self.scene, vello::Scene::new());
         let effects = std::mem::take(&mut self.effects);
         let soft = self.soft.take();
         self.draw(child);
+        self.uncut();
         self.soft = soft;
         self.view = view;
         self.within = within;
