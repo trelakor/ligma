@@ -3741,19 +3741,9 @@ impl Painter {
                 // there are none
                 let (paths, begun, next, slice) = (&self.vello_paths, Instant::now(), std::sync::atomic::AtomicUsize::new(0), self.slice);
                 let threads = std::env::var("LIGMA_NATIVE_VELLO_THREADS").ok().and_then(|n| n.parse().ok()).unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(1).clamp(1, super::pool::MOST)).min(jobs.len());
-                let mut worked: Vec<(Done, i64, usize)> = (|| {
+                let mut worked: Vec<(Done, i64, usize)> = {
                     let (jobs, shown, next) = (&jobs, &shown, &next);
-                    let work = move |behind: bool| {
-                                // Behind every other thread, the browser's
-                                // above all, whose frames Figma's wait on: at
-                                // the same priority they halved Figma's frame
-                                // rate as new things came into view
-                                if behind {
-                                    unsafe {
-                                        use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST};
-                                        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
-                                    }
-                                }
+                    let work = move || {
                                 let mut encoder = super::vello::Encoder::worker(tree, images, paths, drawable, w, h);
                                 encoder.px = Some(px);
                                 let mut done = Vec::new();
@@ -3780,13 +3770,8 @@ impl Painter {
                                 }
                                 (done, encoder.fell_back, encoder.inexact)
                     };
-                    // One unit, as an edit changes, is encoded here at once,
-                    // rather than on a thread started for it, behind others
-                    if threads == 1 && jobs.len() == 1 {
-                        return vec![work(false)];
-                    }
-                    super::pool::run(threads, &move || work(true))
-                })();
+                    super::pool::run(threads, &work)
+                };
                 encoding = begun.elapsed();
                 drop(made_span);
                 let under = self.under_at.map(|at| (vello.kept(0), at));
