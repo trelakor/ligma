@@ -3440,8 +3440,11 @@ impl Painter {
         // would pile them up
         if self.cleaned.elapsed() > UNUSED {
             self.cleaned = Instant::now();
+            let skia = super::span::span("skia cleanup");
             self.gpu.context.perform_deferred_cleanup(UNUSED, Some(skia_safe::gpu::PurgeResourceOptions::ScratchResourcesOnly));
             self.gpu.context.perform_deferred_cleanup(Duration::from_secs(1), None);
+            drop(skia);
+            let _heaps = super::span::span("tidy heaps");
             super::committed::tidy();
         }
         // Past the budget, what's not shown goes. What frames show now

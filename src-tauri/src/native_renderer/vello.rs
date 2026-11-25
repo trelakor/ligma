@@ -747,7 +747,9 @@ impl Vello {
         for part in self.parts.drain().flat_map(|(_, parts)| parts) {
             self.renderer.override_image(&part.data, None);
         }
+        let renderer = super::span::span("vello renderer trim");
         self.renderer.trim();
+        drop(renderer);
         self.out = None;
         self.drop_kept();
         self.pages.clear();
@@ -757,6 +759,7 @@ impl Vello {
             blurrer.filtered = None;
         }
         self.spare = vello::Scene::new();
+        let _waiting = super::span::span("vello trim wait");
         let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         // Dev tools: what's left
         if let Some(report) = std::env::var_os("LIGMA_NATIVE_VELLO_MEMORY").and_then(|_| self.device.generate_allocator_report()) {

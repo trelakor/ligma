@@ -928,6 +928,9 @@ pub struct Screen {
     /// How far ahead of Figma's last frame the frame being drawn is, in
     /// device pixels, which what Figma draws over the scene moves by too
     ahead_px: (f32, f32),
+    /// For the trace, presents not seen on screen yet: the swap chain's
+    /// count of each, the frame and when it was presented
+    on_screen: std::collections::VecDeque<(u32, u64, f64)>,
 }
 
 /// The view's pan between Figma's frames. Figma sends one on fewer than
@@ -1778,6 +1781,7 @@ impl Screen {
             timed_at: 0.0,
             pan: Pan::default(),
             ahead_px: (0.0, 0.0),
+            on_screen: std::collections::VecDeque::new(),
         };
         screen.wrap_buffers()?;
         screen.warm();
@@ -2280,6 +2284,9 @@ impl Screen {
         let _ = unsafe { self.swap_chain.Present(1, DXGI_PRESENT(0)) };
         super::monitor::presented(called.elapsed());
         let presented = super::render::since_epoch_ms();
+        if super::render::tracing() {
+            self.trace_on_screen(seq, presented);
+        }
         // Textures of snapshots before, let go of
         let kept: std::collections::HashSet<usize> = snapshot.layers.iter().map(|layer| Arc::as_ptr(&layer.tex) as usize).collect();
         self.images.retain(|key, _| kept.contains(key));
@@ -2336,6 +2343,38 @@ impl Screen {
         let mut stats = stats().lock().unwrap();
         stats.holes(false);
         stats.record_frame(encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0, counts.native, counts.approximate, counts.skipped, view.zoom, snapshot.pending);
+    }
+}
+
+impl Screen {
+    /// Traces the refresh each present was on screen from, as the swap
+    /// chain counts them, to tell a frame shown a refresh late from one on
+    /// time. Only the latest is known each time, which is each one while
+    /// they're a refresh or more apart
+    fn trace_on_screen(&mut self, seq: u64, presented: f64) {
+        use windows::Win32::Graphics::Dxgi::DXGI_FRAME_STATISTICS;
+        use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+        let Ok(count) = (unsafe { self.swap_chain.GetLastPresentCount() }) else { return };
+        self.on_screen.push_back((count, seq, presented));
+        let mut stats = DXGI_FRAME_STATISTICS::default();
+        if unsafe { self.swap_chain.GetFrameStatistics(&mut stats) }.is_err() {
+            return;
+        }
+        let (mut now, mut frequency) = (0i64, 0i64);
+        let _ = unsafe { (QueryPerformanceCounter(&mut now), QueryPerformanceFrequency(&mut frequency)) };
+        let shown = super::render::since_epoch_ms() - (now - stats.SyncQPCTime) as f64 * 1000.0 / frequency.max(1) as f64;
+        while let Some(&(count, seq, presented)) = self.on_screen.front() {
+            if count > stats.PresentCount {
+                break;
+            }
+            self.on_screen.pop_front();
+            if count == stats.PresentCount {
+                super::render::trace(|| format!("on screen seq={seq} at={shown:.2} refresh={} {:.1}ms after it was presented", stats.SyncRefreshCount, shown - presented));
+            }
+        }
+        while self.on_screen.len() > 16 {
+            self.on_screen.pop_front();
+        }
     }
 }
 
