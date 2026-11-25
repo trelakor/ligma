@@ -2454,11 +2454,7 @@ impl<'a> Encoder<'a> {
                 let Some(path) = &geometry.path else { return };
                 let (skia, bez) = (self.tree.skia_path(path), self.paths.path(self.tree, path));
                 let was = self.source.replace((path.clone(), bez.clone()));
-                self.with(Some(&node.transform.unwrap_or(rt::IDENTITY)), |this| {
-                    for paint in &geometry.paints {
-                        this.paint(node, paint, &skia, &bez);
-                    }
-                });
+                self.with(Some(&node.transform.unwrap_or(rt::IDENTITY)), |this| this.paints(node, &geometry.paints, &skia, &bez));
                 self.source = was;
             }
             Op::FillStroke | Op::ScatterBrushFill | Op::ScatterBrushFillStroke => {
@@ -2492,9 +2488,7 @@ impl<'a> Encoder<'a> {
                 self.with(Some(&node.transform.unwrap_or(rt::IDENTITY)), |this| {
                     let was = this.glyph_lines.take();
                     this.glyph_lines = this.small_glyphs(glyphs).map(|(lines, had)| (&shape as *const BezPath as usize, lines, had));
-                    for paint in &glyphs.paints {
-                        this.paint(node, paint, &outline, &shape);
-                    }
+                    this.paints(node, &glyphs.paints, &outline, &shape);
                     this.glyph_lines = was;
                 });
             }
@@ -2606,9 +2600,7 @@ impl<'a> Encoder<'a> {
                 let Some(path) = &geometry.path else { continue };
                 let (skia, bez) = (this.tree.skia_path(path), this.paths.path(this.tree, path));
                 let was = this.source.replace((path.clone(), bez.clone()));
-                for paint in &geometry.paints {
-                    this.paint(node, paint, &skia, &bez);
-                }
+                this.paints(node, &geometry.paints, &skia, &bez);
                 this.source = was;
             }
         };
@@ -2620,9 +2612,7 @@ impl<'a> Encoder<'a> {
             for geometry in &node.stroke_geometries {
                 let Some(path) = &geometry.path else { continue };
                 let (skia, bez) = (self.tree.skia_path(path), self.paths.path(self.tree, path));
-                for paint in &geometry.paints {
-                    self.paint(node, paint, &skia, &bez);
-                }
+                self.paints(node, &geometry.paints, &skia, &bez);
             }
             return fills(self);
         }
@@ -2643,9 +2633,7 @@ impl<'a> Encoder<'a> {
                 let Some(path) = &geometry.path else { continue };
                 let (skia, bez) = (this.tree.skia_path(path), this.paths.path(this.tree, path));
                 let was = this.source.replace((path.clone(), bez.clone()));
-                for paint in &geometry.paints {
-                    this.paint(node, paint, &skia, &bez);
-                }
+                this.paints(node, &geometry.paints, &skia, &bez);
                 this.source = was;
             }
         };
@@ -2728,7 +2716,7 @@ impl<'a> Encoder<'a> {
                     if cast {
                         return self.silhouette(node, paint, kind, opacity) == Some(true);
                     }
-                    kind == PaintType::Solid && mix(paint.blend_mode).is_none() && !tree::blends(paint.blend_mode) && tree::rgba(paint.color.unwrap_or_default()).a * opacity >= 1.0
+                    self.hides(paint)
                 })
         })
     }
@@ -2786,6 +2774,80 @@ impl<'a> Encoder<'a> {
         self.m = was;
         self.counts.native += 1;
         true
+    }
+
+    /// `paints` in turn over one shape, `skia` and `path` alike. Each drawn
+    /// with its own smoothed edge, where that covers part of a pixel what's
+    /// under them shows through each paint as much as the one under it
+    /// does: under a gradient over white, a light line along the edge. Each
+    /// of Figma's samples is in the shape or not, so its paints share one
+    /// edge. Here those a paint hides aren't drawn, and two or more left
+    /// are drawn over all of a layer the shape cuts once
+    fn paints(&mut self, node: &Node, paints: &[Arc<rt::Paint>], skia: &Path, path: &BezPath) {
+        let from = if self.cast.is_some() { 0 } else { paints.iter().rposition(|paint| self.hides(paint)).unwrap_or(0) };
+        let shown = &paints[from..];
+        // Each blends with what's under the shape, not just the paints
+        // under it
+        let together = shown.len() > 1 && self.cast.is_none() && !switches().nolayers && shown.iter().all(|paint| mix(paint.blend_mode).is_none() && !tree::blends(paint.blend_mode));
+        if let Some((cover_skia, cover)) = together.then(|| self.covering(skia)).flatten() {
+            self.clip_shape(skia, path);
+            for paint in shown {
+                self.paint(node, paint, &cover_skia, &cover);
+            }
+            self.pop();
+            return;
+        }
+        for paint in shown {
+            self.paint(node, paint, skia, path);
+        }
+    }
+
+    /// Whether `paint` hides all of what's under it in its shape
+    fn hides(&self, paint: &rt::Paint) -> bool {
+        if mix(paint.blend_mode).is_some() || tree::blends(paint.blend_mode) || paint.opacity.unwrap_or(1.0).clamp(0.0, 1.0) * self.fade < 1.0 {
+            return false;
+        }
+        match paint.kind.unwrap_or(PaintType::Solid) {
+            PaintType::Solid => tree::rgba(paint.color.unwrap_or_default()).a >= 1.0,
+            // Where Skia has no shader for one, it's drawn as nothing (see
+            // `gradient`)
+            PaintType::GradientLinear | PaintType::GradientRadial => {
+                rt::to_matrix(&paint.transform.unwrap_or(rt::IDENTITY)).invert().is_some()
+                    && paint.gradient.as_ref().is_some_and(|ramp| !ramp.stops.is_empty() && ramp.stops.iter().all(|stop| tree::rgba(stop.color).a >= 1.0))
+            }
+            _ => false,
+        }
+    }
+
+    /// A quad in the current space over the device pixels `skia` touches
+    /// and one more all around, so it covers each of them whole
+    fn covering(&self, skia: &Path) -> Option<(Path, BezPath)> {
+        let inverse = self.m.invert()?;
+        let device: IRect = self.m.map_rect(skia.bounds()).0.round_out();
+        let device = device.with_outset((1, 1));
+        let corners = [(device.left, device.top), (device.right, device.top), (device.right, device.bottom), (device.left, device.bottom)].map(|(x, y)| inverse.map_point((x as f32, y as f32)));
+        let mut quad = skia_safe::PathBuilder::new();
+        quad.move_to(corners[0]).line_to(corners[1]).line_to(corners[2]).line_to(corners[3]).close();
+        let mut bez = BezPath::new();
+        bez.move_to((corners[0].x as f64, corners[0].y as f64));
+        for corner in &corners[1..] {
+            bez.line_to((corner.x as f64, corner.y as f64));
+        }
+        bez.close_path();
+        Some((quad.detach(), bez))
+    }
+
+    /// Clipped to `skia`, `path` alike, in the current space, and any soft
+    /// clip
+    #[track_caller]
+    fn clip_shape(&mut self, skia: &Path, path: &BezPath) {
+        if self.soft.is_some() {
+            return self.clip(skia.with_transform(&self.m));
+        }
+        count_layer();
+        self.scene.push_clip_layer(fill_of(skia), affine(&self.m), path);
+        SIZES[15].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.saved.push((None, true));
     }
 
     /// One paint over `path`, in the node's own coordinates
