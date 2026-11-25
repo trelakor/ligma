@@ -1441,6 +1441,63 @@ fn painted(i: u32, fg: vec4<f32>) {
         clear_solid(i);
     }
 }
+
+// Ligma: paint `fg` drawn where `ms_mask` covers pixel `i`'s samples, `area`
+// of them. Opaque, it takes their place (see `opaque_over`). Otherwise it's
+// blended over each sample it covers: over all of them, the pixel and each
+// opaque color alike (see `painted`). Over some, each opaque color it covers
+// all the samples of is tinted, and the rest of the pixel by as much of it
+// as it covers, as Figma's samples under it are. Only where it covers some
+// of an opaque color's samples is the pixel one color again
+fn paint_over(i: u32, fg: vec4<f32>, area: f32, rgba: ptr<function, array<vec4<f32>, PIXELS_PER_THREAD>>) {
+    if area <= 0.0 {
+        return;
+    }
+    let m = ms_mask[i];
+    if fg.a >= 0.998 {
+        opaque_over(i, fg, rgba);
+        return;
+    }
+    let fg_i = fg * area;
+    var split = m == MS_ALL || fg_i.a <= 0.0 || (solid_any & (1u << i)) == 0u;
+    for (var j = 0u; j < SOLIDS; j += 1u) {
+        let s = solid_mask[i * SOLIDS + j];
+        split = split || ((s & m) != 0u && (s & ~m) != 0u);
+    }
+    if split {
+        (*rgba)[i] = (*rgba)[i] * (1.0 - fg_i.a) + fg_i;
+        painted(i, fg_i);
+        return;
+    }
+    let k = solid_samples(i);
+    let open = 16.0 - f32(countOneBits(k));
+    let covered = f32(countOneBits(m & ~k));
+    let rest = max((*rgba)[i] - solid_sum(i), vec4(0.0));
+    for (var j = 0u; j < SOLIDS; j += 1u) {
+        let at = i * SOLIDS + j;
+        if (solid_mask[at] & m) != 0u {
+            solid_color[at] = pack4x8unorm(unpack4x8unorm(solid_color[at]) * (1.0 - fg.a) + fg);
+        }
+    }
+    let share = select(0.0, covered / open, open > 0.0);
+    (*rgba)[i] = solid_sum(i) + rest * (1.0 - fg.a * share) + fg * (covered * 0.0625);
+}
+
+// Ligma: opaque `fg` drawn where `ms_mask` covers pixel `i`'s samples, taking
+// their place (see `take_samples`). Over all of them, the pixel's that one
+// color, with no samples kept apart, as what's drawn over all of it after
+// is over each alike. Only edges keep samples apart, which is what keeps
+// this cheap
+fn opaque_over(i: u32, fg: vec4<f32>, rgba: ptr<function, array<vec4<f32>, PIXELS_PER_THREAD>>) {
+    if ms_mask[i] == MS_ALL {
+        (*rgba)[i] = (*rgba)[i] * (1.0 - fg.a) + fg;
+        if (solid_any & (1u << i)) != 0u {
+            clear_solid(i);
+        }
+        return;
+    }
+    take_samples(i, fg, rgba);
+}
 #endif
 
 // The X size should be 16 / PIXELS_PER_THREAD
@@ -1472,16 +1529,16 @@ fn main(
     var inner = false;
     var area: array<f32, PIXELS_PER_THREAD>;
 #ifdef msaa16
-    // Ligma: the samples opaque fills have covered, each fill's color apart
-    // (see `take_samples`). A fill covering some of them takes their place,
+    // Ligma: the samples opaque paints have covered, each paint's color apart
+    // (see `take_samples`). A paint covering some of them takes their place,
     // rather than blending over the whole pixel, so shapes meeting within a
     // pixel cover it as Figma's samples do, rather than show what's under
-    // them through both their edges. A clip or layer of normal blend, opaque
-    // over the pixel, takes the place of the samples its shape covers the
-    // same way, and paint over the whole pixel tints each alike. Any other
-    // paint, or layer, leaves the pixel as one color again. Under all
-    // layers, and in the one under all others but a copy, what's in one
-    // deeper drawn as it is
+    // them through both their edges. A clip or layer of normal blend, or a
+    // copy layer, opaque over the pixel, takes the place of the samples its
+    // shape covers the same way, and paint that isn't opaque tints the ones
+    // it covers (see `paint_over`). Any other layer leaves the pixel as one
+    // color again. Under all layers, and in the one under all others but a
+    // copy, what's in one deeper drawn as it is
     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
         clear_solid(i);
     }
@@ -1531,10 +1588,9 @@ fn main(
         }
 #ifdef msaa16
         let paints = tag == CMD_BLUR_RECT || tag == CMD_LIN_GRAD || tag == CMD_RAD_GRAD || tag == CMD_SWEEP_GRAD || tag == CMD_IMAGE;
-        if track(clip_depth, inner) && !paints && tag != CMD_FILL && tag != CMD_SOLID && tag != CMD_COLOR && tag != CMD_JUMP && tag != CMD_BEGIN_CLIP && tag != CMD_END_CLIP {
-            let layer = tag == CMD_BEGIN_CLIP_COPY;
+        if track(clip_depth, inner) && !paints && tag != CMD_FILL && tag != CMD_SOLID && tag != CMD_COLOR && tag != CMD_JUMP && tag != CMD_BEGIN_CLIP && tag != CMD_BEGIN_CLIP_COPY && tag != CMD_END_CLIP {
             for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
-                if layer || area[i] > 0.0 {
+                if area[i] > 0.0 {
                     clear_solid(i);
                 }
             }
@@ -1572,17 +1628,14 @@ fn main(
                 let color = read_color(cmd_ix);
                 let fg = unpack4x8unorm(color.rgba_color);
 #ifdef msaa16
-                if fg.a >= 1.0 && track(clip_depth, inner) {
+                if track(clip_depth, inner) {
                     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
-                        take_samples(i, fg, &rgba);
+                        paint_over(i, fg, area[i], &rgba);
                     }
                 } else {
                     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                         let fg_i = fg * area[i];
                         rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
-                        if track(clip_depth, inner) {
-                            painted(i, fg_i);
-                        }
                     }
                 }
 #else
@@ -1684,12 +1737,15 @@ fn main(
                     let bg = unpack4x8unorm(bg_packed[i]);
 #ifdef msaa16
                     // Ligma: opaque over the pixel, it takes the place of
-                    // the samples its shape covers, as an opaque fill does
+                    // the samples its shape covers, as an opaque fill does.
+                    // A copy layer too, which is put over what it copied as
+                    // a layer is: else what's under its edge, as a shape of
+                    // the same outline under a mask, shows along it
                     if track(clip_depth, inner) {
-                        if (end_clip.blend & 0x7fffu) == COMPOSE_SRC_OVER && end_clip.blend < 0x10000u && end_clip.alpha >= 1.0 && rgba[i].a >= 0.998 {
+                        if ((end_clip.blend & 0x7fffu) == COMPOSE_SRC_OVER || end_clip.blend == BLEND_OVER_COPY) && end_clip.blend < 0x10000u && end_clip.alpha >= 1.0 && rgba[i].a >= 0.998 {
                             let content = rgba[i];
                             rgba[i] = bg;
-                            take_samples(i, content, &rgba);
+                            opaque_over(i, content, &rgba);
                             continue;
                         }
                         if area[i] > 0.0 {
@@ -1766,12 +1822,16 @@ fn main(
                     let alpha = scale * (erf7(inv_std_dev * (min_edge + d)) - erf7(inv_std_dev * d));
 
                     let fg_rgba = blur_rgba * alpha;
-                    let fg_i = fg_rgba * area[i];
-                    rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
                     if track(clip_depth, inner) {
-                        painted(i, fg_i);
+                        paint_over(i, fg_rgba, area[i], &rgba);
+                    } else {
+                        let fg_i = fg_rgba * area[i];
+                        rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
                     }
+#else
+                    let fg_i = fg_rgba * area[i];
+                    rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #endif
                 }
                 cmd_ix += 3u;
@@ -1783,12 +1843,16 @@ fn main(
                     let my_d = d + lin.line_x * f32(i);
                     let x = i32(round(extend_mode_normalized(my_d, lin.extend_mode) * f32(GRADIENT_WIDTH - 1)));
                     let fg_rgba = textureLoad(gradients, vec2(x, i32(lin.index)), 0);
-                    let fg_i = fg_rgba * area[i];
-                    rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
                     if track(clip_depth, inner) {
-                        painted(i, fg_i);
+                        paint_over(i, fg_rgba, area[i], &rgba);
+                    } else {
+                        let fg_i = fg_rgba * area[i];
+                        rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
                     }
+#else
+                    let fg_i = fg_rgba * area[i];
+                    rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #endif
                 }
                 cmd_ix += 3u;
@@ -1832,12 +1896,16 @@ fn main(
                         t = select(t, 1.0 - t, is_swapped);
                         let x = i32(round(t * f32(GRADIENT_WIDTH - 1)));
                         let fg_rgba = textureLoad(gradients, vec2(x, i32(rad.index)), 0);
-                        let fg_i = fg_rgba * area[i];
-                        rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
                         if track(clip_depth, inner) {
-                            painted(i, fg_i);
+                            paint_over(i, fg_rgba, area[i], &rgba);
+                        } else {
+                            let fg_i = fg_rgba * area[i];
+                            rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
                         }
+#else
+                        let fg_i = fg_rgba * area[i];
+                        rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #endif
                     }
                 }
@@ -1871,12 +1939,16 @@ fn main(
                     let t = extend_mode_normalized(phi, sweep.extend_mode);
                     let ramp_x = i32(round(t * f32(GRADIENT_WIDTH - 1)));
                     let fg_rgba = textureLoad(gradients, vec2(ramp_x, i32(sweep.index)), 0);
-                    let fg_i = fg_rgba * area[i];
-                    rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
                     if track(clip_depth, inner) {
-                        painted(i, fg_i);
+                        paint_over(i, fg_rgba, area[i], &rgba);
+                    } else {
+                        let fg_i = fg_rgba * area[i];
+                        rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
                     }
+#else
+                    let fg_i = fg_rgba * area[i];
+                    rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #endif
                 }
                 cmd_ix += 3u;
@@ -1903,12 +1975,17 @@ fn main(
                                 let atlas_uv_clamped = clamp(atlas_uv, image.atlas_offset, atlas_max);
                                 // Nearest neighbor sampling
                                 let fg_rgba = maybe_premul_alpha(textureLoad(image_atlas, vec2<i32>(atlas_uv_clamped), 0), image.alpha_type);
+#ifdef msaa16
+                                let fg_p = pixel_format(fg_rgba * image.alpha, image.format);
+                                if track(clip_depth, inner) {
+                                    paint_over(i, fg_p, area[i], &rgba);
+                                } else {
+                                    let fg_i = fg_p * area[i];
+                                    rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
+                                }
+#else
                                 let fg_i = pixel_format(fg_rgba * area[i] * image.alpha, image.format);
                                 rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
-#ifdef msaa16
-                                if track(clip_depth, inner) {
-                                    painted(i, fg_i);
-                                }
 #endif
                             }
                         }
@@ -1935,12 +2012,17 @@ fn main(
                                 let d = maybe_premul_alpha(textureLoad(image_atlas, vec2<i32>(uv_quad.zw), 0), image.alpha_type);
                                 // Bilinear sampling
                                 let fg_rgba = mix(mix(a, b, uv_frac.y), mix(c, d, uv_frac.y), uv_frac.x);
+#ifdef msaa16
+                                let fg_p = pixel_format(fg_rgba * image.alpha, image.format);
+                                if track(clip_depth, inner) {
+                                    paint_over(i, fg_p, area[i], &rgba);
+                                } else {
+                                    let fg_i = fg_p * area[i];
+                                    rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
+                                }
+#else
                                 let fg_i = pixel_format(fg_rgba * area[i] * image.alpha, image.format);
                                 rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
-#ifdef msaa16
-                                if track(clip_depth, inner) {
-                                    painted(i, fg_i);
-                                }
 #endif
                             }
                         }
@@ -1956,12 +2038,17 @@ fn main(
                         for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                             if area[i] != 0.0 {
                                 let fg_rgba = sampled[i];
+#ifdef msaa16
+                                let fg_p = pixel_format(fg_rgba * image.alpha, image.format);
+                                if track(clip_depth, inner) {
+                                    paint_over(i, fg_p, area[i], &rgba);
+                                } else {
+                                    let fg_i = fg_p * area[i];
+                                    rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
+                                }
+#else
                                 let fg_i = pixel_format(fg_rgba * area[i] * image.alpha, image.format);
                                 rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
-#ifdef msaa16
-                                if track(clip_depth, inner) {
-                                    painted(i, fg_i);
-                                }
 #endif
                             }
                         }
