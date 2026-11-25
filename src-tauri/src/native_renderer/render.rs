@@ -7069,7 +7069,7 @@ impl Painter {
                 if slot != unit.key {
                     aliases.insert(unit.key, slot);
                 }
-                let content = tree.content(unit.place.id);
+                let content = unit.content;
                 units.push(Unit { slot, section: false, bounds, custom: unit.custom, alone: !unit.blends, place: Some(unit.place), blends: unit.blends, content });
             }
             drop(looks_span);

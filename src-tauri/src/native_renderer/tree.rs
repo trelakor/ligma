@@ -255,8 +255,9 @@ pub(super) struct Info {
 pub struct Place {
     pub id: u32,
     pub at: Matrix,
-    /// Fill nodes whose outline clips it, each with where it's drawn
-    pub clips: Vec<(u32, Matrix)>,
+    /// Fill nodes whose outline clips it, each with where it's drawn,
+    /// shared by those in the same clips
+    pub clips: Arc<[(u32, Matrix)]>,
 }
 
 /// See `Tree::look`
@@ -325,6 +326,7 @@ impl Look {
     }
 }
 
+#[derive(Clone)]
 pub struct TreeUnit {
     /// Stays the same while the unit does, as its node never changes
     pub key: usize,
@@ -340,14 +342,57 @@ pub struct TreeUnit {
     /// Draws, where it did, what was part of a unit the units made last
     /// had whose node has gone since, see `Tree::resplit`
     pub kept_part: bool,
+    /// What its node draws, see `Tree::content`
+    pub content: u64,
 }
 
 /// What `Tree::expand` tells `TreeUnit::regroups` by: the units made last,
 /// see `Tree::last_units`, and the keys of those split now into what
-/// doesn't draw all they drew the same
+/// doesn't draw all they drew the same. And what it made of subtrees last,
+/// see `Made`, with what it's made of them so far
 struct Regrouping<'a> {
     last: &'a IdMap<u64, usize>,
     broken: std::collections::HashSet<usize>,
+    made: Made,
+    subtrees: IdMap<u64, Subtree>,
+    /// How many nodes so far were hot or given an owner, and the keys
+    /// looked for in `last`, which a subtree made goes by
+    hot: usize,
+    owned: usize,
+    keys: Vec<u64>,
+    /// The clips units are made in now, once a unit's made in them
+    shared: Option<Arc<[(u32, Matrix)]>>,
+}
+
+/// What `Tree::units` made last of each subtree split into units, by its
+/// place, for the same subtree in the same place to make the same units
+/// again without walking it: walking all of a big file's tree took
+/// milliseconds each frame of an edit
+#[derive(Default)]
+struct Made {
+    /// The units made, before those drawn twice were told apart
+    units: Vec<TreeUnit>,
+    subtrees: IdMap<u64, Subtree>,
+}
+
+/// A subtree as it was split, and the units it made in `Made::units`
+struct Subtree {
+    id: u32,
+    content: u64,
+    depth: u8,
+    at: [u32; 9],
+    /// Each clip's fill, where, and what it draws
+    clips: Vec<(u32, [u32; 9], u64)>,
+    units: std::ops::Range<usize>,
+    /// The keys it and subtrees in it looked for in the units made before
+    /// them, where finding one splits differently
+    keys: Vec<u64>,
+}
+
+fn bits(m: &Matrix) -> [u32; 9] {
+    let mut values = [0.0f32; 9];
+    m.get_9(&mut values);
+    values.map(f32::to_bits)
 }
 
 /// A custom effect node's effects, as the effect host runs them
@@ -519,6 +564,7 @@ pub struct Tree {
     /// The keys of the units `units` last made, by the keys as worked out
     /// before those drawn twice are told apart, those drawn twice left out
     last_units: Mutex<IdMap<u64, usize>>,
+    made: Mutex<Made>,
     /// Where each node those are of is drawn, and inside what
     last_places: Mutex<Places>,
     /// Since then, the keys the parts of those whose nodes frames let go
@@ -534,7 +580,7 @@ pub struct Tree {
 #[derive(Default)]
 struct Places {
     first: IdMap<u32, usize>,
-    all: Vec<(Matrix, Vec<(u32, Matrix)>, usize)>,
+    all: Vec<(Matrix, Arc<[(u32, Matrix)]>, usize)>,
 }
 
 /// Changes with more nodes on the way to what changed than this split
@@ -565,6 +611,7 @@ impl Tree {
             hot: IdMap::default(),
             hot_places: Mutex::default(),
             last_units: Mutex::default(),
+            made: Mutex::default(),
             last_places: Mutex::default(),
             resplit: Mutex::default(),
         }
@@ -622,6 +669,7 @@ impl Tree {
         self.root = Some(header.root);
         self.header = Some(header.clone());
         if header.mode == 0 {
+            *self.made.get_mut().unwrap() = Made::default();
             self.hot.clear();
             self.hot_places.lock().unwrap().clear();
         } else if !applied.new_nodes.is_empty() {
@@ -681,11 +729,11 @@ impl Tree {
     /// beside what changed is drawn as it was
     fn note_parts(&mut self, released: &[u32]) {
         let Places { first, all } = self.last_places.get_mut().unwrap();
-        let mut roots: Vec<(u32, Matrix, Vec<(u32, Matrix)>)> = Vec::new();
+        let mut roots: Vec<(u32, Matrix, Arc<[(u32, Matrix)]>)> = Vec::new();
         for &id in released {
             let mut next = first.remove(&id).unwrap_or(usize::MAX);
-            while let Some((at, clips, after)) = all.get_mut(next) {
-                roots.push((id, *at, std::mem::take(clips)));
+            while let Some((at, clips, after)) = all.get(next) {
+                roots.push((id, *at, clips.clone()));
                 next = *after;
             }
         }
@@ -759,6 +807,11 @@ impl Tree {
                 parts.into_iter().flat_map(|part| part.join().unwrap_or_default()).collect()
             })
         };
+        // A change that sends a node again under its id leaves what those
+        // it's in draw as it was, which what units made of them goes by
+        if previous.is_none() && todo.iter().any(|(id, ..)| self.owns.contains_key(id)) {
+            *self.made.get_mut().unwrap() = Made::default();
+        }
         for ((id, ..), own) in todo.iter().zip(owns) {
             self.owns.insert(*id, own);
         }
@@ -1008,7 +1061,8 @@ impl Tree {
     pub fn units(&self) -> Vec<TreeUnit> {
         let mut out = Vec::new();
         let last = std::mem::take(&mut *self.last_units.lock().unwrap());
-        let mut regrouping = Regrouping { last: &last, broken: Default::default() };
+        let made = std::mem::take(&mut *self.made.lock().unwrap());
+        let mut regrouping = Regrouping { last: &last, broken: Default::default(), made, subtrees: IdMap::default(), hot: 0, owned: 0, keys: Vec::new(), shared: None };
         if let Some(root) = self.root {
             let mut places = self.hot_places.lock().unwrap();
             // While an edit goes on, those split as it started stay so too,
@@ -1017,6 +1071,7 @@ impl Tree {
             places.retain(|_, at| at.elapsed() < if going { HOT_KEPT_EDITING } else { HOT_KEPT });
             self.expand(root, 0, &mut places, Matrix::default(), &mut Vec::new(), 0, None, &mut regrouping, &mut out);
         }
+        *self.made.lock().unwrap() = Made { units: out.clone(), subtrees: regrouping.subtrees };
         let broken = regrouping.broken;
         let resplit = std::mem::take(&mut *self.resplit.lock().unwrap());
         // In the room the keys before took, unless that's far more
@@ -1115,7 +1170,55 @@ impl Tree {
             }
             None => places.contains_key(&place),
         };
+        regrouping.hot += hot as usize;
+        regrouping.owned += owner.is_some() as usize;
         let big = (info.count > SPLIT || info.points > SPLIT_POINTS || hot) && depth < 32;
+        if !big || hot || owner.is_some() {
+            return self.split(id, node, info, big, hot, place, places, at, clips, depth, owner, regrouping, out);
+        }
+        // Nothing in it hot or split by the units before, as it was, it
+        // makes what it made. A node changes under a new id, as do all
+        // those it's in, and what's made is forgotten where the tree's sent
+        // whole or a node's sent again under its id, see `apply` and `renew`
+        let content = self.content(id);
+        let same_clips = |was: &[(u32, [u32; 9], u64)]| was.len() == clips.len() && was.iter().zip(clips.iter()).all(|((fill, at, content), (now, m))| fill == now && *at == bits(m) && *content == self.content(*now));
+        if let Some(was) = regrouping.made.subtrees.remove(&place) {
+            if was.id == id && was.content == content && was.depth == depth && was.at == bits(&at) && same_clips(&was.clips) && !was.keys.iter().any(|key| regrouping.last.contains_key(key)) {
+                let start = out.len();
+                out.extend_from_slice(&regrouping.made.units[was.units.clone()]);
+                regrouping.keys.extend_from_slice(&was.keys);
+                regrouping.subtrees.insert(place, Subtree { units: start..out.len(), ..was });
+                return;
+            }
+        }
+        let (start, hot_before, owned_before, keys_before) = (out.len(), regrouping.hot, regrouping.owned, regrouping.keys.len());
+        self.split(id, node, info, big, hot, place, places, at, clips, depth, owner, regrouping, out);
+        if regrouping.hot == hot_before && regrouping.owned == owned_before {
+            let clips = clips.iter().map(|(fill, m)| (*fill, bits(m), self.content(*fill))).collect();
+            let keys = regrouping.keys[keys_before..].to_vec();
+            regrouping.subtrees.insert(place, Subtree { id, content, depth, at: bits(&at), clips, units: start..out.len(), keys });
+        }
+    }
+
+    /// `expand` of node `id`, `big` if it's split into its children's units
+    /// and `hot` if an edit in it goes on
+    #[allow(clippy::too_many_arguments)]
+    fn split(
+        &self,
+        id: u32,
+        node: &Arc<Node>,
+        info: Info,
+        big: bool,
+        hot: bool,
+        place: u64,
+        places: &mut IdMap<u64, std::time::Instant>,
+        at: Matrix,
+        clips: &mut Vec<(u32, Matrix)>,
+        depth: u8,
+        owner: Option<usize>,
+        regrouping: &mut Regrouping,
+        out: &mut Vec<TreeUnit>,
+    ) {
         let inner = |index: u64| {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             (place, index).hash(&mut hasher);
@@ -1128,15 +1231,21 @@ impl Tree {
         // Split now, a node that a unit the units made last was of, drawn
         // the same where it was, is split into what draws all it drew. Not
         // inside clips, which Skia draws around each unit
-        let split_owner = |clips: &[(u32, Matrix)]| match owner {
+        let split_owner = |clips: &[(u32, Matrix)], regrouping: &mut Regrouping| match owner {
             Some(owner) => Some(owner),
-            None if regrouping.last.is_empty() || !clips.is_empty() || info.blends || info.custom => None,
-            None => regrouping.last.get(&self.key_of(id, &at, clips)).copied(),
+            None if !clips.is_empty() || info.blends || info.custom => None,
+            None => {
+                let key = self.key_of(id, &at, clips);
+                regrouping.keys.push(key);
+                let owner = regrouping.last.get(&key).copied();
+                regrouping.owned += owner.is_some() as usize;
+                owner
+            }
         };
         match node.op {
             Op::OcclusionScope | Op::Metadata | Op::CompositeTileGrid if big => {
                 if let Some(child) = node.child {
-                    let owner = split_owner(clips.as_slice());
+                    let owner = split_owner(clips.as_slice(), regrouping);
                     // It draws its children too, which it isn't split into
                     if let Some(owner) = owner.filter(|_| !node.children.is_empty()) {
                         regrouping.broken.insert(owner);
@@ -1145,7 +1254,7 @@ impl Tree {
                 }
             }
             Op::Group if big => {
-                let owner = split_owner(clips.as_slice());
+                let owner = split_owner(clips.as_slice(), regrouping);
                 for (index, &child) in node.children.iter().enumerate() {
                     self.expand(child, inner(index as u64), places, at, clips, depth + 1, owner, regrouping, out);
                 }
@@ -1153,7 +1262,7 @@ impl Tree {
             }
             Op::StaticTransformBinding if big => {
                 if let (Some(child), Some(t)) = (node.child, node.transform) {
-                    let owner = split_owner(clips.as_slice());
+                    let owner = split_owner(clips.as_slice(), regrouping);
                     return self.expand(child, inner(u64::MAX), places, Matrix::concat(&at, &rt::to_matrix(&t)), clips, depth + 1, owner, regrouping, out);
                 }
             }
@@ -1166,8 +1275,10 @@ impl Tree {
                         regrouping.broken.insert(owner);
                     }
                     clips.push((fill, Matrix::concat(&at, &to)));
+                    regrouping.shared = None;
                     self.expand(color, inner(u64::MAX - 1), places, at, clips, depth + 1, None, regrouping, out);
                     clips.pop();
+                    regrouping.shared = None;
                     return;
                 }
             }
@@ -1188,14 +1299,16 @@ impl Tree {
                 return;
             }
         }
+        let shared = regrouping.shared.get_or_insert_with(|| clips.as_slice().into()).clone();
         out.push(TreeUnit {
             key: self.key_of(id, &at, clips) as usize,
-            place: Place { id, at, clips: clips.clone() },
+            place: Place { id, at, clips: shared },
             bounds,
             blends: info.blends,
             custom: info.custom,
             regroups: owner,
             kept_part: false,
+            content: self.content(id),
         });
     }
 
@@ -1211,7 +1324,7 @@ impl Tree {
         };
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         let mut at = Vec::new();
-        for (fill, m) in &place.clips {
+        for (fill, m) in place.clips.iter() {
             self.content(*fill).hash(&mut hasher);
             at.push(six(m));
         }
@@ -1475,7 +1588,7 @@ impl<'a> Drawer<'a> {
     /// Unit `place`: its node inside its clips
     pub fn place(&mut self, place: &Place) {
         self.canvas.save();
-        for (fill, at) in &place.clips {
+        for (fill, at) in place.clips.iter() {
             if let Some(outline) = self.tree.outline(*fill) {
                 self.canvas.clip_path(&self.volatile(outline.with_transform(at)), ClipOp::Intersect, self.aa);
                 super::emit::clip(self.canvas);
