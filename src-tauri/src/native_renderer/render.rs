@@ -5396,11 +5396,17 @@ impl Painter {
                 if let Some(tree) = &mut self.tree {
                     if tree.octaves != octaves {
                         tree.octaves = octaves;
-                        self.pictures.clear();
-                        self.thumbs.clear();
-                        self.clear_rasters();
-                        self.clear_tiles();
-                        self.dirty = true;
+                        // Drawn again only where something used them, as
+                        // they can come after a file that's opening is drawn
+                        let used = tree.forest.nodes.values().any(|node| matches!(node.op, super::rt::Op::Noise | super::rt::Op::Grain));
+                        trace(|| format!("noise octaves came after the tree, used={used}"));
+                        if used {
+                            self.pictures.clear();
+                            self.thumbs.clear();
+                            self.clear_rasters();
+                            self.clear_tiles();
+                            self.dirty = true;
+                        }
                     }
                 }
             }

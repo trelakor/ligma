@@ -11,9 +11,6 @@
   if (window.__ligmaNative) return "ready";
   if (location.hostname !== "www.figma.com" || window.top !== window) return "unavailable";
 
-  // Figma's noise seed, which a file can't change
-  const NOISE_SEED = 5277;
-
   // Figma's modules: `require` and each module's source, for those whose
   // source has `marker`
   let figmaRequire;
@@ -116,57 +113,6 @@
       return null;
     }
   };
-
-  // Figma's noise hashes each octave's seed with `sin` of numbers so large
-  // that the result is down to how this GPU rounds, so they're worked out
-  // here, on the GPU Figma uses: for each of the four fields, each of the
-  // three octaves' seed and its two gradient scales
-  let noiseOctaves = null;
-  (async () => {
-    const device = await (await navigator.gpu?.requestAdapter())?.requestDevice();
-    if (!device) return;
-    const module = device.createShaderModule({
-      code: `
-        @group(0) @binding(0) var<storage, read_write> out: array<f32, 36>;
-        @group(0) @binding(1) var<uniform> seed: vec4<i32>;
-        fn hash(x: f32) -> f32 { return fract(sin(x * 91.3458f + 12.345f) * 43758.547f); }
-        @compute @workgroup_size(1) fn main() {
-          for (var field = 0; field < 4; field++) {
-            for (var octave = 0; octave < 3; octave++) {
-              let s = fract(sin(f32(seed.x + field) * 91.3458f + f32(octave) * 57.123f + 12.345f) * 43758.547f);
-              let at = (field * 3 + octave) * 3;
-              out[at] = s;
-              out[at + 1] = hash(s + 2.6457f);
-              out[at + 2] = hash(s + 3.6055f);
-            }
-          }
-        }`,
-    });
-    const pipeline = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "main" } });
-    const output = device.createBuffer({ size: 144, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-    const seed = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const readback = device.createBuffer({ size: 144, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(seed, 0, new Int32Array([NOISE_SEED, 0, 0, 0]));
-    const group = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: output } },
-        { binding: 1, resource: { buffer: seed } },
-      ],
-    });
-    const encoder = device.createCommandEncoder();
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, group);
-    pass.dispatchWorkgroups(1);
-    pass.end();
-    encoder.copyBufferToBuffer(output, 0, readback, 0, 144);
-    device.queue.submit([encoder.finish()]);
-    await readback.mapAsync(GPUMapMode.READ);
-    noiseOctaves = Array.from(new Float32Array(readback.getMappedRange()));
-    readback.unmap();
-    device.destroy();
-  })().catch(() => {});
 
   const store = new Map();
   let next = 0;
@@ -817,7 +763,7 @@
         // dark theme
         transparent: !background,
         dark: document.body?.dataset.preferredTheme === "dark",
-        octaves: noiseOctaves,
+        octaves: window.__ligmaHook?.octaves ?? null,
         // Its colors are Display P3, which Figma's renderer shows in sRGB
         p3: figma.root.documentColorProfile === "DISPLAY_P3",
       };
@@ -1038,9 +984,9 @@
       });
     },
 
-    // Figma's noise octaves, once worked out, see `noiseOctaves`
+    // Figma's noise octaves, once worked out, see `octaves` in page_hook.js
     octaves() {
-      return noiseOctaves;
+      return window.__ligmaHook?.octaves ?? null;
     },
 
     // What Figma's renderer is told that's Figma's to set, for page_hook.js

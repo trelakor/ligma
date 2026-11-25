@@ -347,12 +347,6 @@ fn pass_on(ctx: &Ctx, overlay: &mut Option<super::overlay::Decoder>, frame: supe
     if !ctx.tree.swap(true, Ordering::Relaxed) {
         super::mark(|| "drawing Figma's render tree".into());
         set_status("Drawing");
-        if let Some(webview) = current(ctx) {
-            let octaves = eval_value(&webview, "window.__ligmaNative?.octaves?.() ?? null").and_then(|value| serde_json::from_value::<Vec<f32>>(value).ok());
-            if let Some(octaves) = octaves {
-                let _ = ctx.messages.send(Msg::Octaves(octaves));
-            }
-        }
     }
     follow_canvas(ctx, &view);
     let drawn = overlay.as_mut().and_then(|overlay| overlay.decode(frame.ui()));
@@ -529,6 +523,9 @@ fn rest(webview: &Webview) {
     let _ = eval(webview, "window.__ligmaHook?.rest() ?? null", Duration::from_secs(2));
 }
 
+/// Figma's noise octaves, as the page has them, or null
+const OCTAVES: &str = "window.__ligmaHook?.octaves ?? null";
+
 /// Has tab `webview` hand over frames of Figma's render tree, if its page
 /// was hooked as it loaded and Figma's threaded renderer runs in it. True
 /// while it does
@@ -567,8 +564,30 @@ fn start_framing(ctx: &Ctx, webview: &Webview) -> bool {
         stop_framing(ctx, false);
     }
     let path = serde_json::to_string(&format!("/__ligma_native/{}/", pushed().secret)).unwrap();
-    if eval_value(webview, &format!("window.__ligmaHook.push({path})")) != Some(Value::Bool(true)) {
-        return false;
+    // With Figma's noise octaves, asked for here rather than as the first
+    // frame comes, which waited on the page for as long as Figma kept it
+    // busy, a second or more as a file opened
+    let pushed = eval_value(webview, &format!("window.__ligmaHook.push({path}) ? [{OCTAVES}] : null"));
+    let Some(Value::Array(pushed)) = pushed else { return false };
+    match pushed.into_iter().next().and_then(|octaves| serde_json::from_value::<Vec<f32>>(octaves).ok()) {
+        Some(octaves) => {
+            let _ = ctx.messages.send(Msg::Octaves(octaves));
+        }
+        // Worked out on the GPU as the page loads, so asked for again till
+        // they're there
+        None => {
+            let (webview, messages) = (webview.clone(), ctx.messages.clone());
+            std::thread::spawn(move || {
+                for tries in 1..=20 {
+                    sleep(250);
+                    if let Some(octaves) = eval_value(&webview, OCTAVES).and_then(|octaves| serde_json::from_value::<Vec<f32>>(octaves).ok()) {
+                        super::render::trace(|| format!("noise octaves asked for {tries} more times"));
+                        let _ = messages.send(Msg::Octaves(octaves));
+                        return;
+                    }
+                }
+            });
+        }
     }
     *ctx.framing.lock().unwrap() = Some((label, Instant::now()));
     // Figma draws when something changes, so it's asked to now
