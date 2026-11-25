@@ -198,6 +198,9 @@ pub struct Offscreen {
     pub approximate_reason: Option<String>,
     /// Images not here yet, asked for
     pub waiting: usize,
+    /// What's under and around the node drawn too, as Vello draws the view
+    /// whole, so it's only like Figma's render where that's opaque
+    pub under: bool,
 }
 
 /// What the render thread asks the page for: an image fill, about as wide
@@ -8412,6 +8415,9 @@ impl Painter {
 
     fn offscreen(&mut self, id: &str, bounds: Rect, width: u32, height: u32, backdrop: bool) -> Option<Offscreen> {
         let _span = super::span::span("offscreen");
+        if self.tree.is_some() && self.vello_ready() {
+            return self.vello_offscreen(bounds, width, height);
+        }
         let slot = *self.scene.by_id.get(id)?;
         let px = width as f32 / bounds.width().max(1e-6);
         // As tiles are drawn: supersampled, then scaled down
@@ -8450,7 +8456,44 @@ impl Painter {
         if !surface.canvas().read_pixels(&info, &mut pixels, (width * 4) as usize, (0, 0)) {
             return None;
         }
-        Some(Offscreen { pixels, approximate_reason: reason, waiting })
+        Some(Offscreen { pixels, approximate_reason: reason, waiting, under: false })
+    }
+
+    /// `bounds` as Vello draws the view, `width` by `height` from exactly
+    /// its corner, as Figma renders a node there
+    fn vello_offscreen(&mut self, bounds: Rect, width: u32, height: u32) -> Option<Offscreen> {
+        let _span = super::span::span("vello offscreen");
+        let px = width as f32 / bounds.width().max(1e-6);
+        let (x, y) = (bounds.left as f64 * px as f64, bounds.top as f64 * px as f64);
+        let (left, top) = (x.floor() as i32, y.floor() as i32);
+        let phase = ((x - left as f64) as f32, (y - top as f64) as f32);
+        self.settle_unchecked();
+        let mut drawn = None;
+        // Again where it ran out of room in Vello's buffers, which then
+        // have more
+        for _ in 0..8 {
+            let (tex, ..) = self.vello_render(left, top, phase, width as i32, height as i32, px, bounds, None, true, None).ok()?;
+            let short = self.vello.as_mut()?.check(usize::MAX).ok()?;
+            if short.is_none() {
+                drawn = Some(tex);
+                break;
+            }
+            self.retire(tex);
+        }
+        let tex = drawn?;
+        let pixels = self.read_tex(&tex);
+        self.retire(tex);
+        let mut pixels = pixels?;
+        for pixel in pixels.chunks_exact_mut(4) {
+            let alpha = pixel[3] as u32;
+            if alpha > 0 && alpha < 255 {
+                for c in 0..3 {
+                    pixel[c] = ((pixel[c] as u32 * 255 + alpha / 2) / alpha).min(255) as u8;
+                }
+            }
+        }
+        let waiting = self.waiting_areas.values().flatten().filter(|at| Rect::intersects2(at, &bounds)).count();
+        Some(Offscreen { pixels, approximate_reason: None, waiting, under: true })
     }
 
     fn render_view(&mut self, view: &View, width: u32, height: u32) -> Option<(Vec<u8>, usize)> {

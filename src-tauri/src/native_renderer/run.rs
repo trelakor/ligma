@@ -1861,7 +1861,7 @@ fn compare_node(ctx: &Ctx, id: &str) -> Result<PathBuf, String> {
     let pair = render_pair(ctx, &webview, id, 1600.0, scale)?;
     let (width, height) = pair.figma.dimensions();
     let dir = report_dir(ctx, &format!("compare-{}", id.replace([':', ';'], "-")))?;
-    let (matched, mean_error, diff) = compare(pair.figma.as_raw(), &pair.native.pixels, width, height);
+    let (matched, mean_error, diff) = compare(pair.figma.as_raw(), &pair.native.pixels, width, height, pair.native.under);
     let _ = pair.figma.save(dir.join("figma.png"));
     if let Some(native) = image::RgbaImage::from_raw(width, height, pair.native.pixels) {
         let _ = native.save(dir.join("native.png"));
@@ -2123,9 +2123,9 @@ fn score_nodes(ctx: &Ctx, webview: &Webview, picked: Vec<(String, Option<String>
             continue;
         };
         let (width, height) = figma.dimensions();
-        let Offscreen { pixels: native, approximate_reason, .. } = native;
-        let (matched, mean_error, diff) = compare(figma.as_raw(), &native, width, height);
-        let matched_soft = compare(&blur(figma.as_raw(), width, height), &blur(&native, width, height), width, height).0;
+        let Offscreen { pixels: native, approximate_reason, under, .. } = native;
+        let (matched, mean_error, diff) = compare(figma.as_raw(), &native, width, height, under);
+        let matched_soft = compare(&blur(figma.as_raw(), width, height), &blur(&native, width, height), width, height, under).0;
         let _ = figma.save(dir.join(format!("{i:03}-figma.png")));
         if let Some(native) = image::RgbaImage::from_raw(width, height, native) {
             let _ = native.save(dir.join(format!("{i:03}-native.png")));
@@ -2406,9 +2406,11 @@ fn blur(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
 /// Pixels within this of each other on every channel count as matching
 const TOLERANCE: i32 = 16;
 
-/// Share of matching pixels, mean error per channel, and a difference image
-fn compare(a: &[u8], b: &[u8], width: u32, height: u32) -> (f64, f64, Vec<u8>) {
+/// Share of matching pixels, mean error per channel, and a difference image.
+/// With `covered`, only pixels `a` covers count, left white in the image
+fn compare(a: &[u8], b: &[u8], width: u32, height: u32, covered: bool) -> (f64, f64, Vec<u8>) {
     let pixels = (width * height) as usize;
+    let mut counted = 0usize;
     let mut matched = 0usize;
     let mut total = 0u64;
     let mut diff = Vec::with_capacity(pixels * 4);
@@ -2418,6 +2420,11 @@ fn compare(a: &[u8], b: &[u8], width: u32, height: u32) -> (f64, f64, Vec<u8>) {
         [0, 1, 2].map(|c| (p[i + c] as i32 * alpha + 255 * (255 - alpha)) / 255)
     };
     for i in (0..pixels * 4).step_by(4) {
+        if covered && a[i + 3] < 255 {
+            diff.extend_from_slice(&[255, 255, 255, 255]);
+            continue;
+        }
+        counted += 1;
         let (x, y) = (over_white(a, i), over_white(b, i));
         let d = [0, 1, 2].map(|c| (x[c] - y[c]).abs());
         let worst = d[0].max(d[1]).max(d[2]);
@@ -2432,7 +2439,7 @@ fn compare(a: &[u8], b: &[u8], width: u32, height: u32) -> (f64, f64, Vec<u8>) {
             diff.extend_from_slice(&[255, (255 - worst.min(255)) as u8 / 2, 0, 255]);
         }
     }
-    (matched as f64 / pixels.max(1) as f64, total as f64 / (pixels.max(1) * 3) as f64, diff)
+    (matched as f64 / counted.max(1) as f64, total as f64 / (counted.max(1) * 3) as f64, diff)
 }
 
 /// Pans and zooms Figma's canvas for 6 seconds, timing Figma's frames and
