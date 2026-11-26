@@ -747,7 +747,7 @@
       },
       {
         // The layers panel places its rows with 3D translations, for which
-        // Chrome gives each row a layer of its own (see `ROWS`). Moved in 2D
+        // Chrome gives each row a layer of its own. Moved in 2D
         // they're drawn in the panel's layer
         many: true,
         match: (source) => source.includes("translate3d(0px, ${") && /--selection-height|--object-row-height|objects_panel--|object_row--/.test(source),
@@ -783,25 +783,6 @@
               },
       },
     ]);
-  }
-
-  // The layers panel's rows. Chrome sorts the page's compositor layers out
-  // again every frame something moves, as the view does in a pan, at a
-  // cost that grows with the layers and what's painted over them. Each row
-  // had two: one for its 3D translation (see the patch above) and one for
-  // what's painted over its icon, which sticks to the panel's side when it
-  // scrolls across. That made the 118 layers that took 5 ms of a pan's
-  // frame with something selected, which the panels' 32 take 1.3 ms of.
-  // The icons scroll with their rows instead. Their `right` is where they
-  // stick, which moved relatively would put them over the expand caret
-  const ROWS = `[class*="object_row--layerIcon"] { position: relative !important; right: auto !important; }`;
-  {
-    const style = document.createElement("style");
-    style.id = "ligma-native-rows";
-    style.textContent = ROWS;
-    const add = () => (document.head ?? document.documentElement).append(style);
-    if (document.documentElement) add();
-    else addEventListener("DOMContentLoaded", add, { once: true });
   }
 
   // Figma's main thread decodes the images in a file as it opens and copies
