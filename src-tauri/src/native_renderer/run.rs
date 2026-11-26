@@ -1568,10 +1568,10 @@ impl Drop for Decoding {
 /// about the size they show at, and decoded again bigger when zoomed into
 const IMAGE_LIMIT: u32 = 4096;
 
-/// Most of image fills' original bytes kept, as a file of thousands of
-/// photos would otherwise keep gigabytes. Past it those used longest ago
-/// go, and are asked of the page again if they're needed
-const ENCODED_MOST: usize = 256 << 20;
+/// Most of image fills' original bytes kept, of those kept smaller than
+/// they can be, to decode bigger when zoomed into. Past it those used
+/// longest ago go, and are asked of the page again, which has them all
+const ENCODED_MOST: usize = 16 << 20;
 
 /// Image fills' original bytes, those used longest ago going past
 /// `ENCODED_MOST`
@@ -1591,6 +1591,14 @@ impl Encoded {
         let (bytes, used) = self.held.get_mut(hash)?;
         *used = self.uses;
         Some(bytes.clone())
+    }
+
+    fn remove(&mut self, hash: &str) {
+        if let Some((gone, _)) = self.held.remove(hash) {
+            self.bytes -= gone.len();
+        }
+        ENCODED_HELD.0.store(self.held.len(), Ordering::Relaxed);
+        ENCODED_HELD.1.store(self.bytes, Ordering::Relaxed);
     }
 
     fn insert(&mut self, hash: &str, bytes: Arc<Vec<u8>>) {
@@ -1670,8 +1678,13 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     // makes the smaller copies of images it draws from. Any other size
     // would sample differently from Figma
     let mut image = image;
-    for _ in halved..halvings(original.0.max(original.1), side(original, width)) {
+    let halvings_kept = halvings(original.0.max(original.1), side(original, width));
+    for _ in halved..halvings_kept {
         image = halve(&image);
+    }
+    // As big as it's ever kept, it's never decoded again bigger
+    if halvings_kept == halvings(original.0.max(original.1), f64::INFINITY) {
+        ctx.encoded.lock().unwrap().remove(hash);
     }
     if let Some(adjust) = adjust {
         adjust.apply(&mut image);
