@@ -792,8 +792,9 @@
   // what's painted over its icon, which sticks to the panel's side when it
   // scrolls across. That made the 118 layers that took 5 ms of a pan's
   // frame with something selected, which the panels' 32 take 1.3 ms of.
-  // The icons scroll with their rows instead
-  const ROWS = `[class*="object_row--layerIcon"] { position: relative !important; }`;
+  // The icons scroll with their rows instead. Their `right` is where they
+  // stick, which moved relatively would put them over the expand caret
+  const ROWS = `[class*="object_row--layerIcon"] { position: relative !important; right: auto !important; }`;
   {
     const style = document.createElement("style");
     style.id = "ligma-native-rows";
