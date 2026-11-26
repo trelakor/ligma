@@ -243,12 +243,18 @@
     const area = { x: view.x - pad, y: view.y - pad, right: view.x + view.width + pad, bottom: view.y + view.height + pad };
     const near = (box) => box && box.x < area.right && box.x + box.width > area.x && box.y < area.bottom && box.y + box.height > area.y;
     const started = performance.now();
-    let slice = started;
     let nodes = 0;
     const left = [...figma.currentPage.children];
+    // In the page's idle time, as slices between its frames held up the
+    // frames of a pan as the file opened. Waited for no more than a second,
+    // and then a slice short enough not to
+    const idle = () => new Promise((resolve) => (window.requestIdleCallback ? requestIdleCallback(resolve, { timeout: 1000 }) : setTimeout(resolve, 50)));
+    let deadline = await idle();
+    let slice = performance.now();
     while (left.length) {
-      if (performance.now() - slice > 4) {
-        await new Promise((resolve) => setTimeout(resolve));
+      const room = deadline?.didTimeout === false ? deadline.timeRemaining() > 1 : performance.now() - slice < 2;
+      if (!room) {
+        deadline = await idle();
         slice = performance.now();
       }
       const node = left.pop();
