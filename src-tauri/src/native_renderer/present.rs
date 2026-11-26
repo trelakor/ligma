@@ -246,6 +246,11 @@ const HOLD_MOST: Duration = Duration::from_millis(50);
 /// render thread's that far behind
 const EDIT_HOLD: Duration = Duration::from_millis(250);
 
+/// Longest a frame waits for the page to draw what it puts over the canvas
+/// with it (see `Hub::drawn`), as a page busy long after it sends one
+/// shouldn't hold the canvas up too
+const DRAWN_HOLD: Duration = Duration::from_millis(50);
+
 /// What the render thread has drawn, every layer of it up to date as of
 /// frame `seq` of Figma's render tree, so whatever's composed of it at any
 /// view is all of one moment of the page. Nothing in it changes once it's
@@ -288,6 +293,22 @@ impl Snapshot {
     }
 }
 
+/// The present thread waits for the page to say it's drawn a frame, so
+/// what it says is read sooner (see `read_ring`)
+static AWAITING_PAGE: AtomicBool = AtomicBool::new(false);
+
+pub fn awaiting_page() -> bool {
+    AWAITING_PAGE.load(Ordering::Relaxed)
+}
+
+struct Awaiting;
+
+impl Drop for Awaiting {
+    fn drop(&mut self) {
+        AWAITING_PAGE.store(false, Ordering::Relaxed);
+    }
+}
+
 /// What the threads share
 pub struct Hub {
     pub view: Mutex<Option<View>>,
@@ -314,6 +335,10 @@ pub struct Hub {
     pub whole_tab: Mutex<Option<Arc<str>>>,
     changes: Mutex<u64>,
     changed: Condvar,
+    /// The latest frame the page has drawn its own part of, and whether
+    /// it's saying so, see `drawn`
+    page_drawn: AtomicU64,
+    page_says: AtomicBool,
 }
 
 impl Hub {
@@ -332,6 +357,8 @@ impl Hub {
             whole_tab: Mutex::new(None),
             changes: Mutex::new(0),
             changed: Condvar::new(),
+            page_drawn: AtomicU64::new(0),
+            page_says: AtomicBool::new(false),
         }
     }
 
@@ -339,6 +366,18 @@ impl Hub {
     pub fn poke(&self) {
         *self.changes.lock().unwrap() += 1;
         self.changed.notify_all();
+    }
+
+    /// The page has drawn frame `seq` of its own: what Figma puts over the
+    /// canvas as HTML, comment pins, cursors and the rest, which moves in
+    /// the same update of the page as the frame's sent. Chrome shows that
+    /// apart from Ligma's layer, once the update's drawn, so a frame's
+    /// shown no sooner, and both reach the screen together, as in Figma's
+    /// own renderer
+    pub fn drawn(&self, seq: u64) {
+        self.page_drawn.store(seq, Ordering::Relaxed);
+        self.page_says.store(true, Ordering::Relaxed);
+        self.poke();
     }
 
     pub fn set_view(&self, view: View) {
@@ -354,6 +393,8 @@ impl Hub {
         // Lost track: those before go
         if frames.back().is_some_and(|last| last.seq >= seq) {
             frames.clear();
+            self.page_drawn.store(0, Ordering::Relaxed);
+            self.page_says.store(false, Ordering::Relaxed);
         }
         frames.push_back(FrameView { seq, view: view.clone(), overlay, edits, made, came: Instant::now(), sent });
         while frames.len() > 256 {
@@ -375,11 +416,13 @@ impl Hub {
     fn pick(&self, seq: u64, shown: u64) -> Result<Picked, Option<Duration>> {
         let mut frames = self.frames.lock().unwrap();
         if frames.is_empty() {
-            return self.view.lock().unwrap().clone().map(|view| Picked { view, overlay: None, seq, oldest: None, wait: None, came: None, sent: 0.0 }).ok_or(None);
+            return self.view.lock().unwrap().clone().map(|view| Picked { view, overlay: None, seq, oldest: None, wait: None, came: None, sent: 0.0, gate: None }).ok_or(None);
         }
         let mut take = None;
         let mut wait = None;
+        let mut gate = None;
         let latest = frames.back().map(|frame| frame.view.clone());
+        let drawn = self.page_says.load(Ordering::Relaxed).then(|| self.page_drawn.load(Ordering::Relaxed));
         for (i, frame) in frames.iter().enumerate() {
             // One that changes the scene waits for it to be drawn, so what
             // moves with the view moves with it, but not for long, as the
@@ -392,13 +435,45 @@ impl Hub {
                 wait = Some(EDIT_HOLD - waited);
                 break;
             }
+            // Taken, but presented only once the page has drawn it (see
+            // `drawn`), and none after it till then
+            if drawn.is_some_and(|drawn| frame.seq > drawn) {
+                if waited < DRAWN_HOLD {
+                    gate = Some((frame.seq, frame.came + DRAWN_HOLD));
+                    take = Some(i);
+                    break;
+                }
+                self.page_silent(frame.seq, waited);
+            }
             take = Some(i);
         }
         let take = take.ok_or(wait)?;
         let oldest = frames.iter().take(take + 1).filter(|frame| frame.seq > shown).find_map(|frame| frame.made);
         frames.drain(..take);
         let frame = frames.front().ok_or(wait)?;
-        Ok(Picked { view: frame.view.clone(), overlay: frame.overlay.clone(), seq: frame.seq, oldest, wait, came: Some(frame.came), sent: frame.sent })
+        Ok(Picked { view: frame.view.clone(), overlay: frame.overlay.clone(), seq: frame.seq, oldest, wait, came: Some(frame.came), sent: frame.sent, gate })
+    }
+
+    /// Waits till the page has drawn frame `seq`, or `until`
+    fn wait_drawn(&self, seq: u64, until: Instant) {
+        AWAITING_PAGE.store(true, Ordering::Relaxed);
+        let _awaiting = Awaiting;
+        let mut changes = self.changes.lock().unwrap();
+        while self.page_says.load(Ordering::Relaxed) && self.page_drawn.load(Ordering::Relaxed) < seq {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                self.page_silent(seq, DRAWN_HOLD);
+                break;
+            }
+            changes = self.changed.wait_timeout(changes, left).unwrap().0;
+        }
+    }
+
+    /// The page didn't say it drew frame `seq` in time, as when it went
+    /// hidden, so frames aren't held for it till it says again
+    fn page_silent(&self, seq: u64, waited: Duration) {
+        self.page_says.store(false, Ordering::Relaxed);
+        super::render::trace(|| format!("frame {seq} shown without the page drawing it, {:.1}ms on", waited.as_secs_f64() * 1000.0));
     }
 
     /// Waits until poked after `seen`, or `timeout`, and returns the count
@@ -431,6 +506,8 @@ struct Picked {
     /// When it came and when Figma sent it, for frames between Figma's
     came: Option<Instant>,
     sent: f64,
+    /// Presented once the page has drawn this frame, or at the latest then
+    gate: Option<(u64, Instant)>,
 }
 
 /// How long Figma took to make a frame: when it handed it over, in ms since
@@ -1912,7 +1989,7 @@ impl Screen {
                 current_clean = None;
             }
             let picked = current.as_ref().ok_or(None).and_then(|snapshot| hub.pick(snapshot.changes, self.timed).map(|picked| (snapshot.clone(), picked)));
-            let (snapshot, Picked { view, overlay, seq, oldest, wait, came, sent }) = match picked {
+            let (snapshot, Picked { view, overlay, seq, oldest, wait, came, sent, gate }) = match picked {
                 Ok(picked) => picked,
                 Err(wait) => {
                     // The render thread pokes once there's more, and the GPU
@@ -1954,7 +2031,7 @@ impl Screen {
                     // As it was last seen, out of date or not
                     let (pieces, ..) = cover_over(&kept.layers, kept.layers.len(), kept.content, &kept_view, self.size);
                     let _ = self.place(placed(&hub, &kept_view));
-                    self.frame(&kept, &pieces, &kept_view, None, self.timed);
+                    self.frame(&kept, &pieces, &kept_view, None, self.timed, None);
                     self.tab_drawn();
                     room = false;
                     shown = Some((kept.serial, kept_view.clone(), None, self.size));
@@ -2145,7 +2222,7 @@ impl Screen {
                 }
             }
             PATH.store(path, Ordering::Relaxed);
-            self.frame(&source, &pieces, &view, overlay.as_ref(), seq);
+            self.frame(&source, &pieces, &view, overlay.as_ref(), seq, gate.map(|gate| (&*hub, gate)));
             complete_view = Some(view.clone());
             room = false;
             look = looks.map(|looks| (looks, then.clone()));
@@ -2212,8 +2289,9 @@ impl Screen {
     }
 
     /// Shows `pieces` of `snapshot` at `view`, and what Figma draws over it
-    /// in frame `seq`
-    fn frame(&mut self, snapshot: &Snapshot, pieces: &[Piece], view: &View, overlay: Option<&super::overlay::Drawn>, seq: u64) {
+    /// in frame `seq`, presented once the page has drawn the frame `gate` is
+    /// for, as the GPU draws it meanwhile
+    fn frame(&mut self, snapshot: &Snapshot, pieces: &[Piece], view: &View, overlay: Option<&super::overlay::Drawn>, seq: u64, gate: Option<(&Hub, (u64, Instant))>) {
         let start = Instant::now();
         let index = unsafe { self.swap_chain.GetCurrentBackBufferIndex() } as usize;
         if index >= self.buffers.len() {
@@ -2280,6 +2358,9 @@ impl Screen {
             self.reading.pop_front();
         }
         let rendered = start.elapsed();
+        if let Some((hub, (seq, until))) = gate {
+            hub.wait_drawn(seq, until);
+        }
         let called = Instant::now();
         let _ = unsafe { self.swap_chain.Present(1, DXGI_PRESENT(0)) };
         super::monitor::presented(called.elapsed());

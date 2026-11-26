@@ -1199,6 +1199,9 @@ const RING_WRAP: u32 = u32::MAX;
 const RING_MORE: u32 = 1;
 /// The part goes on from the one before
 const RING_REST: u32 = 2;
+/// The part is no frame's: it's the last frame sent the page has drawn its
+/// own part of, and when, in ms since 1970, as two doubles
+const RING_DRAWN: u32 = 4;
 
 /// Windows rounds timed waits up to its timer tick, 15.6ms unless an app
 /// asks for finer, so frames waited on by the present thread would come late
@@ -1288,6 +1291,14 @@ fn read_ring(tab: String, ring: crate::webview2::Shared) {
                     break;
                 }
                 let bytes = unsafe { std::slice::from_raw_parts(data.add(at + 8), len as usize) };
+                if flags & RING_DRAWN != 0 {
+                    if let Some(mark) = bytes.get(..16) {
+                        let double = |at: usize| f64::from_le_bytes(mark[at..at + 8].try_into().unwrap());
+                        page_drew(&tab, double(0) as u64, double(8));
+                    }
+                    read += size as u64;
+                    continue;
+                }
                 // A frame's first part, or the rest of the one begun
                 if flags & RING_REST == 0 {
                     partial = Some(Vec::with_capacity(len as usize));
@@ -1310,11 +1321,22 @@ fn read_ring(tab: String, ring: crate::webview2::Shared) {
                 fence(Release);
                 unsafe { std::ptr::write_volatile((base as *mut f64).add(1), read as f64) };
             } else {
-                sleep_fine(Duration::from_micros(500));
+                sleep_fine(Duration::from_micros(if super::present::awaiting_page() { 100 } else { 500 }));
             }
         }
         READING.lock().unwrap().retain(|reading| *reading != tab);
     });
+}
+
+/// Tab `tab` has drawn what it puts over the canvas with frame `seq`, at
+/// `at`, in ms since 1970, so the frame can be shown (see `Hub::drawn`)
+fn page_drew(tab: &str, seq: u64, at: f64) {
+    let Some(ctx) = CTX.lock().unwrap().clone() else { return };
+    if ctx.framing.lock().unwrap().as_ref().is_none_or(|(framing, _)| framing != tab) {
+        return;
+    }
+    ctx.hub.drawn(seq);
+    super::render::trace(|| format!("page drew frame {seq} {:.1}ms ago", super::render::since_epoch_ms() - at));
 }
 
 /// Slots of the view the page writes to shared memory (see page.js)

@@ -446,7 +446,10 @@
     // which for a whole scene held the page up for tens of milliseconds
     const chunks = [lead, header, ...forestParts(f.renderTreeForest), ui];
     hook.sent++;
-    if (ring(chunks)) return;
+    if (ring(chunks)) {
+      sentFrame(seq);
+      return;
+    }
     fetch(location.origin + hook.pushTo + `f${session}-${seq}`, { method: "POST", body: new Blob(chunks), cache: "no-store", credentials: "omit" })
       .then((response) => {
         if (response.status !== 204) throw new Error(`${response.status}`);
@@ -454,13 +457,74 @@
       .catch(() => (hook.wantFull = true));
   }
 
+  // What Figma puts over the canvas as HTML, comment pins, cursors and the
+  // rest, moves in the same update of the page as each frame is sent, but
+  // Chrome puts it on screen only once that update's drawn, while Ligma
+  // could show the frame at once. So Ligma's told when it's drawn, through
+  // the ring, and shows the frame then, both reaching the screen together
+  // (see `Hub::drawn` in present.rs). A frame sent in the page's frame
+  // callbacks is drawn as they end, one sent from outside them in the page's
+  // next frame
+  let inFrame = 0;
+  const requestFrame = window.requestAnimationFrame;
+  window.requestAnimationFrame = function (callback) {
+    if (typeof callback !== "function") return requestFrame.apply(window, arguments);
+    return requestFrame.call(window, (time) => {
+      inFrame++;
+      try {
+        return callback(time);
+      } finally {
+        inFrame--;
+      }
+    });
+  };
+  // The latest frame sent in the page's frame under way or one before, and
+  // the latest sent outside them since
+  let framed = 0;
+  let outside = 0;
+  let posted = false;
+  let asked = false;
+  const drawn = () => {
+    posted = false;
+    ring([new Uint8Array(new Float64Array([framed, systemNow()]).buffer)], RING_DRAWN);
+  };
+  const afterUpdate = new MessageChannel();
+  afterUpdate.port1.onmessage = drawn;
+  // Runs once the page's frame under way is drawn, as a task can't run
+  // during one. Ahead of the page's other tasks where it can be, as Chrome
+  // may show the frame before they're done
+  const whenDrawn = () => {
+    if (posted) return;
+    posted = true;
+    if (window.scheduler?.postTask) window.scheduler.postTask(drawn, { priority: "user-blocking" }).catch(() => {});
+    else afterUpdate.port2.postMessage(0);
+  };
+  function sentFrame(seq) {
+    if (inFrame) {
+      framed = seq;
+      whenDrawn();
+      return;
+    }
+    outside = seq;
+    if (asked) return;
+    asked = true;
+    requestFrame.call(window, () => {
+      asked = false;
+      framed = Math.max(framed, outside);
+      whenDrawn();
+    });
+  }
+
   // Memory shared with Ligma that frames go through (see `read_ring` in
   // run.rs): the bytes written in all and those Ligma has read, then parts of
   // frames, round. A frame bigger than what's free goes in parts, waiting for
-  // Ligma to read the ones before, which it does within a millisecond or so
+  // Ligma to read the ones before, which it does within a millisecond or so.
+  // A part flagged `RING_DRAWN` is no frame's: it's the last frame sent the
+  // page has drawn its own part of, and when
   const RING_HEADER = 64;
   const RING_PART = 4 << 20;
   const RING_WAIT = 100;
+  const RING_DRAWN = 4;
   let shared = null;
   window.chrome?.webview?.addEventListener("sharedbufferreceived", (event) => {
     if (!event.additionalData?.ligmaFrames) return;
@@ -470,7 +534,7 @@
     positions[0] = positions[1];
     shared = { positions, bytes: new Uint8Array(buffer, RING_HEADER), view: new DataView(buffer, RING_HEADER), capacity: buffer.byteLength - RING_HEADER };
   });
-  function ring(chunks) {
+  function ring(chunks, flags = 0) {
     if (!shared) return false;
     const { positions, bytes, view, capacity } = shared;
     const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
@@ -523,7 +587,7 @@
         continue;
       }
       view.setUint32(at, part, true);
-      view.setUint32(at + 4, (offset + part < length ? 1 : 0) | (offset ? 2 : 0), true);
+      view.setUint32(at + 4, (offset + part < length ? 1 : 0) | (offset ? 2 : 0) | flags, true);
       copy(part, at + 8);
       positions[0] = written + 8 + Math.ceil(part / 8) * 8;
       offset += part;
