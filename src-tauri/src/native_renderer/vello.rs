@@ -944,28 +944,32 @@ pub struct Drawable {
 
 /// Skia's `path` as Vello's
 pub fn bez(path: &Path) -> BezPath {
-    let mut out = BezPath::new();
+    use kurbo::PathEl;
+    // Sized to the path, as grown a verb at a time up to a quarter of the
+    // path cache's memory went unused
+    let mut out = Vec::with_capacity(path.count_verbs());
     let p = |point: Point| kurbo::Point::new(point.x as f64, point.y as f64);
     let mut quads = [Point::default(); 9];
     for rec in path.iter() {
         let points = rec.points();
         match rec.verb() {
-            PathVerb::Move => out.move_to(p(points[0])),
-            PathVerb::Line => out.line_to(p(points[1])),
-            PathVerb::Quad => out.quad_to(p(points[1]), p(points[2])),
+            PathVerb::Move => out.push(PathEl::MoveTo(p(points[0]))),
+            PathVerb::Line => out.push(PathEl::LineTo(p(points[1]))),
+            PathVerb::Quad => out.push(PathEl::QuadTo(p(points[1]), p(points[2]))),
             PathVerb::Conic => match Path::convert_conic_to_quads(points[0], points[1], points[2], rec.conic_weight(), &mut quads, 2) {
                 Some(count) => {
                     for quad in 0..count {
-                        out.quad_to(p(quads[1 + quad * 2]), p(quads[2 + quad * 2]));
+                        out.push(PathEl::QuadTo(p(quads[1 + quad * 2]), p(quads[2 + quad * 2])));
                     }
                 }
-                None => out.line_to(p(points[2])),
+                None => out.push(PathEl::LineTo(p(points[2]))),
             },
-            PathVerb::Cubic => out.curve_to(p(points[1]), p(points[2]), p(points[3])),
-            PathVerb::Close => out.close_path(),
+            PathVerb::Cubic => out.push(PathEl::CurveTo(p(points[1]), p(points[2]), p(points[3]))),
+            PathVerb::Close => out.push(PathEl::ClosePath),
         }
     }
-    out
+    out.shrink_to_fit();
+    BezPath::from_vec(out)
 }
 
 /// Clips what's drawn in `scene` from now on, till its layer's popped, to
