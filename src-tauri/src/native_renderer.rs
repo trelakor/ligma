@@ -171,6 +171,8 @@ pub fn init(app: &AppHandle, settings: &Settings) {
 
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     show_stats_if(app, settings);
+    #[cfg(windows)]
+    present::hold_for_page(settings.overlay_sync);
     let on = enabled(settings);
     if ON.swap(on, Ordering::Relaxed) == on {
         return;

@@ -177,6 +177,10 @@ pub struct Settings {
     /// renderer (see native_renderer.rs). Only while `experimental` is on.
     /// Windows only
     pub native_renderer: bool,
+    /// Ligma's renderer holds each frame till the page has drawn what
+    /// Figma shows over the canvas for it, so comment pins and the like
+    /// move with it, a refresh later. Only with `native_renderer`
+    pub overlay_sync: bool,
     /// Frame times and GPU memory over the canvas, of whichever renderer
     /// draws it, beside the one used before. Only while `experimental` is on
     pub renderer_stats: bool,
@@ -240,6 +244,7 @@ impl Default for Settings {
             ligma_mcp: true,
             experimental: false,
             native_renderer: false,
+            overlay_sync: false,
             renderer_stats: false,
         }
     }

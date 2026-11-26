@@ -293,6 +293,14 @@ impl Snapshot {
     }
 }
 
+/// Settings' Keep overlays in step: frames wait for the page to have drawn
+/// them before they're presented (see `wait_drawn`)
+static HOLD_FOR_PAGE: AtomicBool = AtomicBool::new(false);
+
+pub fn hold_for_page(on: bool) {
+    HOLD_FOR_PAGE.store(on, Ordering::Relaxed);
+}
+
 /// The present thread waits for the page to say it's drawn a frame, so
 /// what it says is read sooner (see `read_ring`)
 static AWAITING_PAGE: AtomicBool = AtomicBool::new(false);
@@ -422,7 +430,7 @@ impl Hub {
         let mut wait = None;
         let mut gate = None;
         let latest = frames.back().map(|frame| frame.view.clone());
-        let drawn = self.page_says.load(Ordering::Relaxed).then(|| self.page_drawn.load(Ordering::Relaxed));
+        let drawn = (HOLD_FOR_PAGE.load(Ordering::Relaxed) && self.page_says.load(Ordering::Relaxed)).then(|| self.page_drawn.load(Ordering::Relaxed));
         for (i, frame) in frames.iter().enumerate() {
             // One that changes the scene waits for it to be drawn, so what
             // moves with the view moves with it, but not for long, as the

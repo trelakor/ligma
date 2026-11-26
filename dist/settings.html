@@ -874,6 +874,12 @@
         </span>
         <button type="button" class="picker" id="renderer" aria-haspopup="listbox" aria-expanded="false" data-options='[["figma","Figma"],["ligma","Ligma (experimental)"]]'><span class="picker-label"></span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m5.5 7 2.5 2.5L10.5 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </label>
+      <label class="row nested deeper" id="overlay-sync-row" hidden data-keywords="comments cursors pins lag latency delay behind">
+        <span class="label">Keep overlays in step
+          <div class="hint">Holds each frame of Ligma's renderer till Figma has drawn its comments, cursors and other overlays for it, so they move together with the canvas. Adds about one screen refresh of delay</div>
+        </span>
+        <input type="checkbox" class="switch" id="overlay-sync">
+      </label>
       <label class="row nested deeper" id="renderer-stats-row" hidden data-keywords="fps frame time gpu memory vram graph debug performance">
         <span class="label">Show stats
           <div class="hint">Frame times and GPU memory in the corner of the canvas, with graphs. After switching renderers, the one used before shows beside it to compare</div>
@@ -1268,7 +1274,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp", "experimental-features", "renderer", "renderer-stats"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp", "experimental-features", "renderer", "overlay-sync", "renderer-stats"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1820,6 +1826,8 @@
     $("experimental-features").checked = settings.experimental;
     $("renderer-row").hidden = !settings.experimental;
     $("renderer").value = settings.nativeRenderer ? "ligma" : "figma";
+    $("overlay-sync").checked = settings.overlaySync;
+    $("overlay-sync-row").hidden = !settings.experimental || !settings.nativeRenderer;
     $("renderer-stats").checked = settings.rendererStats;
     $("renderer-stats-row").hidden = !settings.experimental;
     // Without sleep nothing is unloaded, so the other memory options do nothing
@@ -1915,6 +1923,7 @@
       ligmaMcp: $("ligma-mcp").checked,
       experimental: $("experimental-features").checked,
       nativeRenderer: $("renderer").value === "ligma",
+      overlaySync: $("overlay-sync").checked,
       rendererStats: $("renderer-stats").checked,
       ...changes,
     };
