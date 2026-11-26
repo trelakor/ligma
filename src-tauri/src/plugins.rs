@@ -964,8 +964,8 @@ const PAGE_JS: &str = r##"(() => {
   // Figma's own code for saved plugins, found by text in its modules like
   // `RUNNER_JS` finds its plugin host. Each piece is looked up when first
   // needed, as some load with the panels that use them. One pass over the
-  // modules (some 60 ms) looks for all that are missing, at most every 5
-  // seconds unless `now`, for a click
+  // modules not yet looked through looks for all that are missing, at most
+  // every 5 seconds unless `now`, for a click
   const SIGNS = {
     store: "This API is intended only for debugging",
     runner: "runExtensionMenuAction: Expected PluginsMenuArgs",
@@ -980,6 +980,7 @@ const PAGE_JS: &str = r##"(() => {
   };
   let figmaRequire = null;
   const modules = {};
+  const seen = new Set();
   let scanned = -Infinity;
   const figmaModule = (key, now = false) => {
     if (modules[key]) return modules[key];
@@ -995,24 +996,32 @@ const PAGE_JS: &str = r##"(() => {
     if (!require?.m) return null;
     const missing = Object.keys(SIGNS).filter((name) => !modules[name]);
     for (const id of Object.keys(require.m)) {
+      // Each module's looked through once, as what's missing only shrinks,
+      // and all of them again for one that's never found stalled the page
+      // some 100 ms every time
+      if (seen.has(id)) continue;
+      seen.add(id);
       const source = String(require.m[id]);
       for (const name of missing) {
         if (modules[name] || !source.includes(SIGNS[name])) continue;
+        // What the module imports as `alias` and exports as `name`
+        const resolve = (alias, name) => {
+          const load = source.match(/^[^(]*\([\w$]+,[\w$]+,([\w$]+)\)/)?.[1];
+          if (!alias || !load) return undefined;
+          const quote = (name) => name.replace(/\$/g, "\\$");
+          const module = source.match(new RegExp(`[,;\\s]${quote(alias)}=${quote(load)}\\((\\d+)\\)`))?.[1];
+          return module && require(module)[name];
+        };
         // What the module calls `(0,alias.name)(…)` in the part matching
         // `pattern`, with the alias and name captured in pairs
         const imported = (pattern) => {
           const match = source.match(pattern);
-          const load = source.match(/^[^(]*\([\w$]+,[\w$]+,([\w$]+)\)/)?.[1];
-          if (!match || !load) return [];
+          if (!match) return [];
           const values = [];
-          for (let i = 1; i < match.length; i += 2) {
-            const quote = (name) => name.replace(/\$/g, "\\$");
-            const module = source.match(new RegExp(`[,;\\s]${quote(match[i])}=${quote(load)}\\((\\d+)\\)`))?.[1];
-            values.push(module && require(module)[match[i + 1]]);
-          }
+          for (let i = 1; i < match.length; i += 2) values.push(resolve(match[i], match[i + 1]));
           return values;
         };
-        modules[name] = { exports: require(id), imported };
+        modules[name] = { exports: require(id), source, resolve, imported };
       }
     }
     return modules[key] ?? null;
@@ -1029,17 +1038,28 @@ const PAGE_JS: &str = r##"(() => {
     const manifestMenu = figmaModule("manifestMenu");
     if (!store || !runner || !manifestMenu) return null;
     const fns = (module) => Object.values(module.exports).filter((value) => typeof value === "function");
-    // Figma's shortcuts run `run(context(state, editor()), "quick-actions",
+    // Figma's shortcuts run `run(context(state, editor(), ...), "quick-actions",
     // action)`, set up with the app in newer builds and in the shortcuts
-    // module in older ones
-    let [context, editor] =
-      figmaModule("setup")?.imported(/\(0,[\w$]+\.[\w$]+\)\(\(0,([\w$]+)\.([\w$]+)\)\([\w$]+\.getState\(\),\(0,([\w$]+)\.([\w$]+)\)\(\)\),"quick-actions",/) ?? [];
-    if (!context || !editor) {
+    // module in older ones. Newer builds also pass values read from atoms,
+    // `store.get(atom)`, which are read the same way as it's run
+    let context, editor;
+    let atoms = [];
+    const setup = figmaModule("setup");
+    const call = setup?.source.match(
+      /\(0,[\w$]+\.[\w$]+\)\(\(0,([\w$]+)\.([\w$]+)\)\([\w$]+\.getState\(\),\(0,([\w$]+)\.([\w$]+)\)\(\)((?:,[\w$]+\.[\w$]+\.get\([\w$]+\.[\w$]+\))*)\),"quick-actions",/,
+    );
+    if (call) {
+      context = setup.resolve(call[1], call[2]);
+      editor = setup.resolve(call[3], call[4]);
+      atoms = [...call[5].matchAll(/,([\w$]+)\.([\w$]+)\.get\(([\w$]+)\.([\w$]+)\)/g)].map((m) => [setup.resolve(m[1], m[2]), setup.resolve(m[3], m[4])]);
+      if (atoms.some(([from, atom]) => typeof from?.get !== "function" || atom == null)) return null;
+    } else {
       [context, editor] = figmaModule("shortcuts")?.imported(/\(0,([\w$]+)\.([\w$]+)\)\([\w$]+,\(0,([\w$]+)\.([\w$]+)\)\(\)\)/) ?? [];
     }
+    if (typeof context !== "function" || typeof editor !== "function") return null;
     const core = {
       store: () => store.globalReduxStore,
-      context,
+      context: () => context(store.globalReduxStore.getState(), editor(), ...atoms.map(([from, atom]) => from.get(atom))),
       editor,
       run: fns(runner).find((fn) => functionText(fn).includes("runExtensionMenuAction")),
       menuItem: fns(runner).find((fn) => functionText(fn).includes('case"run-menu-action":return{displayText:')),
@@ -1113,7 +1133,7 @@ const PAGE_JS: &str = r##"(() => {
   const runSaved = (plugin, action) => {
     const core = internals();
     try {
-      const context = core.context(core.store().getState(), core.editor());
+      const context = core.context();
       core.run({ ...context, allSavedPlugins: { [plugin.plugin_id]: plugin, ...context.allSavedPlugins } }, "quick-actions", action);
     } catch (error) {
       console.error("Ligma: couldn't run plugin", error);
