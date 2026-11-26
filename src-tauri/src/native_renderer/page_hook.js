@@ -791,6 +791,71 @@
     ]);
   }
 
+  // The layers panel's rows. Chrome sorts the page's compositor layers out
+  // again each frame Figma moves its HTML, as it does through a pan, at a
+  // cost that grows with the layers. Each row's icon and actions stick to
+  // the panel's right edge, and Chrome can't merge what's painted after
+  // something sticky with what's under it, so an expanded group's rows made
+  // 231 layers and 6 to 18 ms of each frame of a pan, which the 31 left take
+  // 0.5 ms of. They're placed where sticking puts them instead: the actions,
+  // which all stick as far as the rows overflow the panel, moved by that, and
+  // the icons, which stick only in rows nested past the panel's edge, left
+  // where they are while none is
+  const ROWS = `
+[data-ligma-rows] [class*="object_row--rowActionsSticky"] { position: relative !important; right: auto !important; left: var(--ligma-row-actions, 0px) !important; }
+[data-ligma-rows="flat"] [class*="object_row--layerIcon"] { position: relative !important; right: auto !important; }`;
+  {
+    const style = document.createElement("style");
+    style.id = "ligma-native-rows";
+    style.textContent = ROWS;
+    const add = () => (document.head ?? document.documentElement).append(style);
+    if (document.documentElement) add();
+    else addEventListener("DOMContentLoaded", add, { once: true });
+    let scroller = null;
+    // How far from the edge the icons stick, read while they do
+    let iconRight = 16;
+    const place = () => {
+      const rows = scroller?.querySelector('[class*="objects_panel--rowContainer"]');
+      if (!rows) return;
+      const edge = scroller.getBoundingClientRect().left + scroller.clientLeft + scroller.clientWidth;
+      scroller.style.setProperty("--ligma-row-actions", `${Math.min(0, edge - rows.getBoundingClientRect().right)}px`);
+      const icons = rows.querySelectorAll('[class*="object_row--layerIcon"]');
+      if (scroller.dataset.ligmaRows !== "flat" && icons.length) iconRight = parseFloat(getComputedStyle(icons[0]).right) || iconRight;
+      // Sticking, an icon past where it sticks is shown where it sticks
+      let flat = true;
+      for (const icon of icons) if (icon.getBoundingClientRect().right >= edge - iconRight - 0.5) flat = false;
+      scroller.dataset.ligmaRows = flat ? "flat" : "actions";
+    };
+    const sizes = new ResizeObserver(place);
+    // The panel's scroller, found again should the panel be made anew
+    setInterval(() => {
+      if (scroller?.isConnected && scroller.querySelector('[class*="objects_panel--rowContainer"]')) return;
+      const rows = document.querySelector('[class*="objects_panel--rowContainer"]');
+      let found = rows?.parentElement;
+      while (found && !/auto|scroll/.test(getComputedStyle(found).overflowX)) found = found.parentElement;
+      sizes.disconnect();
+      scroller = found ?? null;
+      if (!scroller) return;
+      sizes.observe(scroller);
+      sizes.observe(rows);
+      place();
+    }, 1000);
+    // And again once the rows the scroll brings into view are made
+    let again = 0;
+    addEventListener(
+      "scroll",
+      (event) => {
+        if (event.target !== scroller) return;
+        place();
+        again ||= requestAnimationFrame(() => {
+          again = 0;
+          place();
+        });
+      },
+      { capture: true, passive: true },
+    );
+  }
+
   // Figma's main thread decodes the images in a file as it opens and copies
   // each to its own GPU, for what it still draws itself while Ligma draws the
   // canvas: layer previews, thumbnails and exports. Of 319 in a file, it drew
