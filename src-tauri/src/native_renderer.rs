@@ -163,6 +163,8 @@ pub fn autorun() -> bool {
 /// Call once the main window is up
 pub fn init(app: &AppHandle, settings: &Settings) {
     show_stats_if(app, settings);
+    #[cfg(windows)]
+    present::hold_for_page(settings.overlay_sync);
     if enabled(settings) {
         ON.store(true, Ordering::Relaxed);
         start(app);
