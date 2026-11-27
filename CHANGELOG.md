@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.46.3 - 2026-11-26
+
+- Exporting one image from inside a group saves just that image, where it asked for a folder and made a folder and subfolder with the image in it.
+- Exports always keep their file type. Some saved as "All files" with no extension, so they couldn't be opened or previewed.
+
 ## 0.46.2 - 2026-11-21
 
 - Signed out, Home takes you to Figma's login page, where it showed an empty page that couldn't load anything. Once you're signed in, it goes back to Ligma's home page with your files.
