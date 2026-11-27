@@ -114,8 +114,10 @@ fn temp_path() -> PathBuf {
 /// The pending export a finished download is for. Windows says where it saved
 /// a finished download, which is the export's own temporary file. When it
 /// doesn't, after a failure or always on macOS, the URL is all there is, so
-/// the oldest export from that URL is taken. Two at once from one blob: or
-/// data: URL hold the same bytes, so only their suggested names can mix up
+/// the oldest export from that URL is taken. On macOS that's always the right
+/// one: WebKit folds clicks on one URL that come together into one download,
+/// and starts a later one only after the earlier one has finished, so two
+/// from one URL are never pending at once
 fn take_pending(url: &Url, path: Option<&Path>) -> Option<Pending> {
     let mut pending = PENDING.lock().unwrap();
     let index = path
