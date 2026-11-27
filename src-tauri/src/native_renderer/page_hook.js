@@ -791,6 +791,120 @@
     ]);
   }
 
+  // React tells the components that read a context its value changed by
+  // walking all of what's under its provider for them. Figma provides the
+  // view's x, y, zoom and the like that way, around nearly all of its UI, so
+  // each step of a pan or zoom walked some 6,600 components for each that
+  // changed, for the 6 or so that read them, 3 ms of a zoom's frame. Once a
+  // provider's walk has gone through that many, the context's readers are
+  // kept as they read it, and only they're told, as the walk would have
+  // told them. Contexts read by classes, which are told differently, or
+  // with parts rendered on a server under them, are left to the walk
+  const BIG_WALK = 500;
+  window.__ligmaContexts = {
+    walked: new WeakSet(),
+    walk: null,
+    // The walk before, its readers kept if it was big enough to be worth it
+    finish() {
+      const walk = this.walk;
+      this.walk = null;
+      if (!walk) return;
+      const { provider, context } = walk;
+      if (walk.unsafe) {
+        context.__ligmaWalkOnly = true;
+        delete context.__ligmaReaders;
+      } else if (walk.steps >= BIG_WALK) {
+        for (const reader of walk.readers) context.__ligmaReaders.add(reader);
+        this.walked.add(provider);
+        if (provider.alternate) this.walked.add(provider.alternate);
+        context.__ligmaBig = true;
+      } else if (!context.__ligmaBig) delete context.__ligmaReaders;
+    },
+    begin(provider, context) {
+      this.finish();
+      if (context.__ligmaWalkOnly) return;
+      context.__ligmaReaders ??= new Set();
+      this.walk = { provider, context, steps: 0, readers: [], unsafe: false };
+    },
+    step(fiber) {
+      const walk = this.walk;
+      if (!walk) return;
+      walk.steps++;
+      if (fiber.tag === 18) walk.unsafe = true;
+    },
+    found(fiber) {
+      const walk = this.walk;
+      if (!walk) return;
+      walk.readers.push(fiber);
+      if (fiber.tag === 1) walk.unsafe = true;
+    },
+    // Tells `context`'s readers under `provider`, as the walk does, unless
+    // the provider hasn't been walked since its readers were kept
+    tell(provider, context, lanes, schedule) {
+      this.finish();
+      const readers = context.__ligmaReaders;
+      if (!readers || context.__ligmaWalkOnly || !(this.walked.has(provider) || (provider.alternate && this.walked.has(provider.alternate)))) return false;
+      for (const reader of readers) {
+        let reads = false;
+        for (let at = reader.dependencies?.firstContext; at; at = at.next) if (at.context === context) reads = true;
+        // Removed from the page, or no longer reading it
+        if (!reads) {
+          readers.delete(reader);
+          continue;
+        }
+        if (reader.tag === 1) {
+          context.__ligmaWalkOnly = true;
+          return false;
+        }
+        // Told only by the provider nearest above it
+        let above = reader.return;
+        while (above && !(above.tag === 10 && above.type?._context === context)) above = above.return;
+        if (!above) {
+          readers.delete(reader);
+          continue;
+        }
+        if (above !== provider && above !== provider.alternate) continue;
+        reader.lanes |= lanes;
+        if (reader.alternate) reader.alternate.lanes |= lanes;
+        schedule(reader.return, lanes, above);
+        reader.dependencies.lanes |= lanes;
+      }
+      return true;
+    },
+  };
+  window.__ligmaModules?.patch([
+    {
+      // React's own: where it reads a context and where it walks for those
+      // that read one (see `__ligmaContexts`). Left as it is unless each
+      // part is found once
+      match: (source) => source.includes("memoizedValue:") && source.includes("firstContext:") && source.includes("._currentValue"),
+      source: (source) => {
+        const read = source.match(/function ([\w$]+)\(([\w$]+)\)\{var ([\w$]+)=\2\._currentValue;if\(([\w$]+)!==\2\)if\(\2=\{context:\2,memoizedValue:\3,next:null\},null===([\w$]+)\)\{if\(null===([\w$]+)\)throw/);
+        const walk = source.match(/\}else for\(null!==\(([\w$]+)=([\w$]+)\.child\)&&\(\1\.return=\2\);null!==\1;\)\{var ([\w$]+)=\1\.dependencies;if\(null!==\3\)\{([\w$]+)=\1\.child;for\(var ([\w$]+)=\3\.firstContext;null!==\5;\)\{if\(\5\.context===([\w$]+)\)\{/);
+        if (!read || !walk || source.split(read[0]).length !== 2 || source.split(walk[0]).length !== 2) return source;
+        const [, reader, provider, deps, child, at, context] = walk;
+        const quote = (name) => name.replace(/\$/g, "\\$");
+        // Where the walk tells a reader: the lanes it's told of and what
+        // schedules the work on the way to it
+        const told = source
+          .slice(walk.index)
+          .match(new RegExp(`${quote(reader)}\\.lanes\\|=([\\w$]+),null!==\\(${quote(at)}=${quote(reader)}\\.alternate\\)&&\\(${quote(at)}\\.lanes\\|=\\1\\),([\\w$]+)\\(${quote(reader)}\\.return,\\1,${quote(provider)}\\)`));
+        if (!told) return source;
+        const [, lanes, schedule] = told;
+        // The context read and the component rendering, which reads it
+        const [, , readsOf, , , , rendering] = read;
+        const L = "window.__ligmaContexts";
+        return source
+          .replace(read[0], () => read[0].replace("{var ", `{${readsOf}.__ligmaReaders&&${rendering}&&${readsOf}.__ligmaReaders.add(${rendering});var `))
+          .replace(
+            walk[0],
+            () =>
+              `}else if(!${L}||!${L}.tell(${provider},${context},${lanes},${schedule}))for(${L}&&${L}.begin(${provider},${context}),null!==(${reader}=${provider}.child)&&(${reader}.return=${provider});null!==${reader};){${L}&&${L}.step(${reader});var ${deps}=${reader}.dependencies;if(null!==${deps}){${child}=${reader}.child;for(var ${at}=${deps}.firstContext;null!==${at};){if(${at}.context===${context}){${L}&&${L}.found(${reader});`,
+          );
+      },
+    },
+  ]);
+
   // The layers panel's rows. Chrome sorts the page's compositor layers out
   // again each frame Figma moves its HTML, as it does through a pan, at a
   // cost that grows with the layers. Each row's icon and actions stick to
