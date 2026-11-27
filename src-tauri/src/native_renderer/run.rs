@@ -1568,10 +1568,51 @@ impl Drop for Decoding {
 /// about the size they show at, and decoded again bigger when zoomed into
 const IMAGE_LIMIT: u32 = 4096;
 
-/// Most of image fills' original bytes kept, of those kept smaller than
-/// they can be, to decode bigger when zoomed into. Past it those used
-/// longest ago go, and are asked of the page again, which has them all
+/// Most of image fills' original bytes kept in memory, of those kept
+/// smaller than they can be, to decode bigger when zoomed into. Past it
+/// those used longest ago are read from disk again (see `originals_dir`)
 const ENCODED_MOST: usize = 16 << 20;
+
+/// Where image fills' original bytes go once read, so one needed again, as
+/// when zoomed into, is read from disk. Asked of the page again, each read
+/// held Figma's frames up some 300 ms, and a file's 546 images were read
+/// 13,843 times. Those of Ligmas that have quit are removed
+fn originals_dir() -> Option<&'static std::path::Path> {
+    static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let root = std::env::temp_dir();
+        let dir = root.join(format!("ligma-originals-{}", std::process::id()));
+        for entry in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with("ligma-originals-") && entry.path() != dir {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(dir)
+    })
+    .as_deref()
+}
+
+fn original_path(hash: &str) -> Option<std::path::PathBuf> {
+    (!hash.is_empty() && hash.chars().all(|c| c.is_ascii_alphanumeric())).then(|| originals_dir().map(|dir| dir.join(hash))).flatten()
+}
+
+/// Image fill `hash`'s original bytes put on disk, if they aren't yet
+fn spill(hash: &str, bytes: &[u8]) {
+    let Some(path) = original_path(hash) else { return };
+    if path.exists() {
+        return;
+    }
+    // Written whole before it's there to be read
+    let part = path.with_extension("part");
+    if std::fs::write(&part, bytes).is_ok() && std::fs::rename(&part, &path).is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+}
+
+fn unspill(hash: &str) -> Option<Vec<u8>> {
+    std::fs::read(original_path(hash)?).ok()
+}
 
 /// Image fills' original bytes, those used longest ago going past
 /// `ENCODED_MOST`
@@ -1629,12 +1670,20 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     let short = hash.get(..8).unwrap_or(hash);
     // In view, so handed over before it was asked for
     let kept = ctx.encoded.lock().unwrap().get(hash);
-    let cached = kept.or_else(|| {
-        let bytes = Arc::new(pushed().wait(&format!("i{hash}"), Instant::now())?);
-        super::mark(|| format!("image {short} was handed over"));
-        ctx.encoded.lock().unwrap().insert(hash, bytes.clone());
-        Some(bytes)
-    });
+    let cached = kept
+        .or_else(|| {
+            let bytes = Arc::new(unspill(hash)?);
+            super::mark(|| format!("image {short} read from disk"));
+            ctx.encoded.lock().unwrap().insert(hash, bytes.clone());
+            Some(bytes)
+        })
+        .or_else(|| {
+            let bytes = Arc::new(pushed().wait(&format!("i{hash}"), Instant::now())?);
+            super::mark(|| format!("image {short} was handed over"));
+            spill(hash, &bytes);
+            ctx.encoded.lock().unwrap().insert(hash, bytes.clone());
+            Some(bytes)
+        });
     let bytes = match cached {
         Some(bytes) => bytes,
         None => {
@@ -1665,6 +1714,7 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
             };
             let bytes = Arc::new(bytes);
             super::mark(|| format!("image {short} read, the job started after {} ms, read after {} ms", started_in_page.as_millis(), asked.elapsed().as_millis()));
+            spill(hash, &bytes);
             ctx.encoded.lock().unwrap().insert(hash, bytes.clone());
             bytes
         }
