@@ -211,14 +211,24 @@ fn save(webview: &Webview, pending: &Pending) -> std::io::Result<()> {
 }
 
 /// Writes `path` through a file beside it, so a failed write neither leaves
-/// half a file nor spoils one it was replacing
+/// half a file nor spoils one it was replacing. The file beside it is always
+/// a new one, so nothing already there is touched
 fn write(path: &Path, fill: impl FnOnce(&mut File) -> std::io::Result<()>) -> std::io::Result<()> {
-    let mut partial = path.as_os_str().to_owned();
-    partial.push(".ligma-partial");
-    let partial = PathBuf::from(partial);
-    let result = File::create(&partial)
-        .and_then(|mut file| fill(&mut file).and_then(|()| file.sync_all()))
-        .and_then(|()| std::fs::rename(&partial, path));
+    let (partial, mut file) = (1..=100)
+        .find_map(|n| {
+            let mut partial = path.as_os_str().to_owned();
+            partial.push(format!(".ligma-partial-{n}"));
+            let partial = PathBuf::from(partial);
+            match File::create_new(&partial) {
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                result => Some(result.map(|file| (partial, file))),
+            }
+        })
+        .unwrap_or_else(|| Err(std::io::ErrorKind::AlreadyExists.into()))?;
+    // The file is closed before it's renamed, which Windows needs
+    let written = fill(&mut file).and_then(|()| file.sync_all());
+    drop(file);
+    let result = written.and_then(|()| std::fs::rename(&partial, path));
     if result.is_err() {
         let _ = std::fs::remove_file(&partial);
     }
